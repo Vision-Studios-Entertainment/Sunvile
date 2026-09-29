@@ -1,7 +1,34 @@
+/* RENDERER — draws the world every frame onto the #game canvas.
+
+   Layout
+     init/resize    canvas + offscreen `light` layer; resize also rebuilds
+                    the rain drop pool (density scales with screen area)
+     nightAlpha     game-minutes -> dusk tint; the only owner of the day/
+                    night look (values tuned in render.js, not data.js)
+     updateCam      camera follow, clamped to map bounds; `snap` jumps
+                    instead of lerping (used on teleports/title)
+     draw()         ORDER MATTERS: world tiles -> sorted props/entities ->
+                    FX -> target mark -> lighting -> weather -> vignette.
+                    A second pass would double-draw, so add new layers here
+     drawX          one function per visual kind; drawChar is shared by NPCs
+     drawLighting   blits `light` (multiplicative) so lamps/night read over
+                    the scene
+
+   Contracts
+     * ZOOM (data.js) scales world units to screen px — the camera works in
+       world units; never scale a sprite by hand, multiply by ZOOM.
+     * Everything is drawn in one pass with integer-rounded positions to
+       keep pixel art crisp (imageSmoothingEnabled is off).
+
+   Called from main.js frame(): Renderer.updateCam(dt) then Renderer.draw(dt)
+   then UI.draw() last, so the HUD is never covered by the world. */
+
 const Renderer = {
   canvas: null, ctx: null, light: null, lctx: null,
   W: 0, H: 0, t: 0, cam: { x: 0, y: 0 }, snapped: false,
   drops: [], boltT: 4, boltNext: 6, drawList: [], seen: null,
+
+// ---- setup: canvases, resize, rain pool ---------------------------
 
   init: function (canvas) {
     this.canvas = canvas;
@@ -30,6 +57,8 @@ const Renderer = {
     }
   },
 
+// ---- time of day ---------------------------------------------------
+
   nightAlpha: function (min) {
     if (min < 360) return 0.62;
     if (min < 540) return 0.62 * (1 - (min - 360) / 180);
@@ -38,6 +67,8 @@ const Renderer = {
     if (min < 1260) return 0.62 + 0.16 * ((min - 1140) / 120);
     return 0.78;
   },
+
+// ---- camera + main frame ------------------------------------------
 
   updateCam: function (dt, snap) {
     const map = World.map();
@@ -144,6 +175,8 @@ const Renderer = {
     this.drawVignette();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   },
+
+// ---- world & entity drawing ---------------------------------------
 
   drawProp: function (p) {
     const ctx = this.ctx;
@@ -321,6 +354,8 @@ const Renderer = {
     ctx.fillRect(x, y + TILE - 1, L, 1); ctx.fillRect(x, y + TILE - L, 1, L);
     ctx.fillRect(x + TILE - L, y + TILE - 1, L, 1); ctx.fillRect(x + TILE - 1, y + TILE - L, 1, L);
   },
+
+// ---- post passes: lighting, weather, vignette ----------------------
 
   drawLighting: function (camX, camY, vw, vh) {
     const a = this.nightAlpha(Game.timeMin);

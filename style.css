@@ -1,3 +1,8 @@
+/* SUNVALE — page shell only. Everything visible is drawn onto <canvas> by
+   render.js/ui.js, so there are no DOM elements to style beyond the canvas.
+   `image-rendering: pixelated` keeps the 16px art crisp when scaled up;
+   Renderer sets canvas.width/height in device pixels and CSS stretches it. */
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {

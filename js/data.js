@@ -1,3 +1,25 @@
+/* DATA — pure static content. Every constant the rest of the game reads.
+   No DOM, no Game/World state, no side effects: safe to edit freely and the
+   first thing to check when someone asks "where do I change X?".
+
+   Layout
+     tuning     TILE/ZOOM/MAP_*, T tile enum, per-tile flag tables, energy,
+                movement speeds, day clock, FARMABLE field rect
+     entities   CROPS, ITEMS, RECIPES, UPGRADES
+     economy    SHOP_STOCK, TAVERN_STOCK
+     people     NPC_DEFS (villagers: home/range/likes/loves/lines)
+     narrative  STORY chapters, MAIL_TIPS / MAIL_REQUESTS letters,
+                FRIEND_MILESTONES, GIFT_THANKS
+     display    HELP_LINES, TILE_NAMES
+
+   Cross-file contracts
+     * T.<TILE> indexes must match the flag tables in the same order and the
+       tile sprites built in sprites.js buildTiles().
+     * ITEMS[<id>].k ('tool'|'seed'|'crop'|'mat'|'food') drives
+       Game.use()/sell/gift branches — keep it lowercase and consistent.
+     * Save/load serialises ids, never names: renaming an ITEM/CROP id
+       breaks old saves. Add a new id instead of renaming. */
+
 const TILE = 16;
 const ZOOM = 3;
 const MAP_W = 60;
@@ -21,6 +43,8 @@ const SEC_PER_MIN = 0.45;
 const DAY_START = 360;
 const DAY_END = 1560;
 const FARMABLE = { x0: 8, y0: 22, x1: 33, y1: 47 };
+
+// ---- crops & items ------------------------------------------------
 
 const CROPS = {
   turnip: { name: 'Turnip', days: 4, seeds: 'turnip_seeds', leaf: '#5fae44', leaf2: '#3f8a2f', fruit: '#f0eaf7', fruit2: '#b98fd0', form: 'bulb' },
@@ -66,6 +90,8 @@ const ITEMS = {
   egg: { n: 'Egg', k: 'crop', sell: 55, food: 10, d: 'Fresh from the coop' }
 };
 
+// ---- crafting, upgrades & shop stock ------------------------------
+
 const RECIPES = [
   { out: 'veg_stew', need: { potato: 1, carrot: 1, turnip: 1 }, d: 'SIMMER ROOTS OVER A SLOW FLAME' },
   { out: 'omelette', need: { egg: 2 }, d: 'TWO EGGS AND A PINCH OF HERB' },
@@ -85,6 +111,8 @@ const SHOP_STOCK = [
 ];
 
 const TAVERN_STOCK = ['omelette', 'veg_stew', 'berry_pie', 'pumpkin_soup'];
+
+// ---- villagers (dialogue, home range, gift tastes) ----------------
 
 const NPC_DEFS = [
   {
@@ -199,6 +227,8 @@ const NPC_DEFS = [
     ]
   }
 ];
+
+// ---- narrative: chapters, letters, milestones ---------------------
 
 const STORY = [
   {
@@ -391,6 +421,8 @@ const GIFT_THANKS = [
   'YOU HAVE A KIND HEART, FARMER.',
   'I WILL TREASURE THIS. THANK YOU!'
 ];
+
+// ---- display strings (help overlay, tile names) -------------------
 
 const HELP_LINES = [
   'MOVE        WASD / ARROWS',

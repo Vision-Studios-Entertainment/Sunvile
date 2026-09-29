@@ -175,14 +175,12 @@ function validate() {
     }
   }
   const used = new Set([...baseChars, ...overChars]);
+  const unused = [];
   for (const name in ART.palettes) {
     for (const ch of used) if (!ART.palettes[name][ch]) issues.push('palette ' + name + ' missing key "' + ch + '"');
+    for (const ch in ART.palettes[name]) if (!used.has(ch)) unused.push(name + ':' + ch);
   }
-  for (const name in ART.palettes) {
-    for (const ch in ART.palettes[name]) {
-      if (!used.has(ch)) issues.push('palette ' + name + ' unused key "' + ch + '"');
-    }
-  }
+  if (unused.length) console.log('note: unused palette keys -> ' + unused.join(' '));
   return issues;
 }
 

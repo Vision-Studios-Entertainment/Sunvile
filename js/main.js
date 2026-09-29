@@ -1,3 +1,27 @@
+/* MAIN — boot, the frame loop and all input routing. Loaded LAST.
+
+   Layout
+     Input          key state + logical actions (left/right/up/down/run);
+                    keys are stored lower-cased by e.key
+     boot()         runs on window 'load': builds sprites, Game.init(),
+                    registers every window listener, starts the RAF loop
+     frame(now)     one tick: Game.update -> Renderer.updateCam -> draw ->
+                    UI.draw, wrapped in try/catch so a thrown error paints an
+                    ERROR banner instead of killing the loop
+     onKey/onMouse  the key/mouse state machines. Each one switches on
+                    Game.state (and UI.helpOpen) — add a new screen here too
+     runSmokeTest() headless regression suite; see index.html header for how
+                    to run it (?test=1 reads PASS/FAIL from document.title)
+
+   Routing rules
+     * onKey handles keyboard, onMouse handles pointer; both funnel through
+       UI.click() first so canvas buttons win over world clicks.
+     * AudioSys.init()/resume() happen on the first input event — browsers
+       block sound until a user gesture.
+
+   Note: `window 'error'` at the bottom surfaces any uncaught exception into
+   document.title/#testout, which is what headless checks assert on. */
+
 const Input = {
   keys: {}, mx: 0, my: 0,
   map: {
@@ -14,6 +38,8 @@ const Input = {
 let TitleT = 0;
 let lastT = 0;
 let canvasEl = null;
+
+// ==== boot (window load) ===========================================
 
 function boot() {
   canvasEl = document.getElementById('game');
@@ -68,6 +94,8 @@ function boot() {
   }
 }
 
+// ==== frame loop ===================================================
+
 function frame(now) {
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
@@ -91,12 +119,15 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+// ==== keyboard routing =============================================
+
 function onKey(e) {
   const k = e.key.toLowerCase();
   Input.keys[k] = true;
   if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab'].indexOf(e.key.toLowerCase()) >= 0) e.preventDefault();
   if (e.repeat) return;
   AudioSys.init(); AudioSys.resume();
+  if (Game.state === 'title') AudioSys.startMusic();
 
   if (k === 'm') {
     const off = AudioSys.toggleMute();
@@ -105,11 +136,16 @@ function onKey(e) {
   }
 
   if (Game.state === 'title') {
-    if (k === 'enter' || k === ' ') {
-      if (Game.hasSave) Game.continueGame(); else Game.newGame();
-      Renderer.titleCam = false;
-      Renderer.updateCam(1, true);
+    if (UI.helpOpen) {
+      if (k === 'escape' || k === 'h' || k === 'enter' || k === ' ') {
+        UI.helpOpen = false; AudioSys.play('close');
+      }
+      return;
     }
+    if (k === 'h') { UI.helpOpen = true; AudioSys.play('open'); return; }
+    if (k === 'arrowup' || k === 'w') { UI.titleMove(-1); return; }
+    if (k === 'arrowdown' || k === 's') { UI.titleMove(1); return; }
+    if (k === 'enter' || k === ' ') { UI.titleActivate(); return; }
     return;
   }
 
@@ -179,10 +215,13 @@ function onKey(e) {
   }
 }
 
+// ==== mouse routing =================================================
+
 function onMouse(e) {
   UI.mx = e.clientX; UI.my = e.clientY;
   Input.mx = e.clientX; Input.my = e.clientY;
   AudioSys.init(); AudioSys.resume();
+  if (Game.state === 'title') AudioSys.startMusic();
   if (e.button !== 0) return;
   if (Game.state === 'title') { setTimeout(function () { UI.click(e.clientX, e.clientY); }, 0); return; }
   if (UI.click(e.clientX, e.clientY)) return;
@@ -195,6 +234,8 @@ function onMouse(e) {
     Game.use();
   }
 }
+
+// ==== smoke test (?test=1) =========================================
 
 function runSmokeTest() {
   const out = [];
@@ -264,7 +305,10 @@ function runSmokeTest() {
   ok('load works', Game.state === 'play' && Game.day === 5, 'day=' + Game.day + ' state=' + Game.state);
 
   const mailBefore = Game.mail.length;
+  const dayKept = Game.day;
+  Game.day = 6;
   Game.deliverMail();
+  Game.day = dayKept;
   ok('daily mail delivered', Game.mail.length > mailBefore, mailBefore + '->' + Game.mail.length);
   ok('welcome mail kept', Game.mail.some(function (m) { return m.subject === 'WELCOME TO SUNVALE'; }));
   ok('unread mail counted', Game.unreadMail() > 0, 'unread=' + Game.unreadMail());

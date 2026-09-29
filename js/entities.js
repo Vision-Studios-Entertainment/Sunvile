@@ -1,3 +1,22 @@
+/* ENTITIES — everything that moves on the map.
+
+   Player     position/animation state + movement, collision (hits) and
+              unstick() rescue when a move wedges the player in a solid tile.
+              `box` is the collision footprint in pixels, not tiles.
+   DIRV       dir-name -> tile-step vector; Player.front() uses it to find
+              the tile the player is facing (Game's tools act on that tile).
+   FX         particles, floating text and toasts — pure visual, no state
+              the game cares about. burst/float/toast are called everywhere.
+   walkNPC/updateNPCs/updateChickens   wander AI; runs once per frame from
+              Game.update().
+   nearestInteract()  THE interaction lookup: scans props/NPCs/chickens in
+              front of the player and returns a typed descriptor
+              ({kind:'mailbox'|'bed'|'npc'|..., prop, x, y, ...}).
+              Game.interact() switches on .kind — add a new interactable by
+              extending both this function and that switch.
+   charSprite(pal, dir, frame)  palette-name -> canvas from Sprites.player,
+              silently falling back to the player palette if unknown. */
+
 const Player = {
   x: 10 * TILE + 8, y: 14 * TILE, dir: 'down', frame: 0, anim: 0,
   moving: false, palette: 'player', useTimer: 0, useTool: null, run: false,
@@ -8,6 +27,8 @@ const Player = {
     const tx = Math.floor(this.x / TILE), ty = Math.floor(this.y / TILE);
     return { x: (tx + d.x) * TILE + 8, y: (ty + d.y) * TILE + 8 };
   },
+
+// ---- player movement & collision ---------------------------------
 
   update: function (dt) {
     if (this.useTimer > 0) this.useTimer -= dt;
@@ -89,6 +110,8 @@ const DIRV = {
 
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 
+// ---- FX: particles, floating text, toasts --------------------------
+
 const FX = {
   list: [], floats: [], toasts: [], hearts: [], rain: [], splashes: [], lightning: 0, flash: 0,
 
@@ -144,6 +167,8 @@ const FX = {
   }
 };
 
+// ---- NPC / chicken wander AI --------------------------------------
+
 function walkNPC(e, dt, range, speed) {
   if (e.state === 'idle') {
     e.wait -= dt;
@@ -182,7 +207,7 @@ function updateNPCs(dt) {
   const m = World.map();
   for (const n of m.npcs) {
     const range = n.range || n.def.range;
-    if (n.def.id === 'juniper') { n.moving = false; n.frame = 0; continue; }
+    if (n.def.id === 'juniper' || n.def.static || !range) { n.moving = false; n.frame = 0; continue; }
     walkNPC(n, dt, range, 26);
   }
 }
@@ -213,6 +238,8 @@ function updateChickens(dt) {
     c.frame = [0, 1, 0, 2][Math.floor(c.anim) % 4];
   }
 }
+
+// ---- interaction lookup (feeds Game.interact) ---------------------
 
 function nearestInteract() {
   const f = Player.front();

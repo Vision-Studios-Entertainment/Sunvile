@@ -1,3 +1,10 @@
+/* ART — raw pixel-art source data. No logic, no canvas work.
+   One string = one row of pixels; each character is a palette key
+   (see ART.palettes), '.' = transparent.
+   Exposed as `var` so Node can require() it (tools/preview.js).
+   Consumed by: sprites.js buildCharacters() -> Sprites.player[<palette>].
+   INVARIANT: every row must be exactly `w` chars or the sprite shears —
+   `node tools/preview.js` prints row widths for the player grids. */
 var ART = {
   player: {
     w: 16,

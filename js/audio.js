@@ -1,6 +1,21 @@
+/* AUDIO — WebAudio synthesis. No audio files exist: SFX are short oscillator
+   envelopes (tone/noise) and the music is a generative loop scheduled
+   ahead of time (schedule/note), not a playlist.
+
+   Typical use: AudioSys.init() + resume() on the first key/click (browsers
+   block audio before a user gesture), then AudioSys.play('<name>').
+
+   State you may toggle
+     muted      kills everything (M key)      musicOn  music bus on/off
+     setRain(on) crossfades a filtered-noise rain bed during rain/storm
+
+   Gotcha: init() is idempotent and failure-tolerant — if AudioContext is
+   unavailable the game must keep running, so never assume this.ctx exists;
+   every entry point guards on this.ready. */
+
 const AudioSys = {
   ctx: null, master: null, sfxGain: null, musicGain: null, rainGain: null,
-  muted: false, musicOn: true, ready: false,
+  muted: Settings.data.muted, musicOn: Settings.data.musicOn, ready: false,
   step: 0, nextTime: 0, timer: null, rainSrc: null,
 
   init: function () {
@@ -19,12 +34,26 @@ const AudioSys = {
       this.musicGain.gain.value = this.musicOn ? 0.42 : 0;
       this.musicGain.connect(this.master);
       this.ready = true;
+      this.applyVolumes();
     } catch (e) { this.ready = false; }
+  },
+
+  applyVolumes: function () {
+    const s = Settings.data;
+    this.muted = !!s.muted;
+    this.musicOn = !!s.musicOn;
+    if (!this.ready) return;
+    const now = this.ctx.currentTime;
+    this.master.gain.setTargetAtTime(this.muted ? 0 : (s.master / 100) * 0.5, now, 0.02);
+    this.sfxGain.gain.setTargetAtTime((s.sfx / 100) * 0.75, now, 0.02);
+    this.musicGain.gain.setTargetAtTime(this.musicOn ? (s.music / 100) * 0.42 : 0, now, 0.05);
   },
 
   resume: function () {
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
   },
+
+// ---- synth primitives: oscillator + noise bursts -------------------
 
   tone: function (freq, dur, type, vol, slide, delay) {
     if (!this.ready || this.muted) return;
@@ -58,6 +87,8 @@ const AudioSys = {
     src.start(t);
   },
 
+// ---- SFX table: AudioSys.play('<name>') ----------------------------
+
   play: function (name) {
     if (!this.ready || this.muted) return;
     switch (name) {
@@ -87,6 +118,8 @@ const AudioSys = {
     }
   },
 
+// ---- rain bed -----------------------------------------------------
+
   setRain: function (on) {
     if (!this.ready) return;
     if (on && !this.rainSrc) {
@@ -111,16 +144,16 @@ const AudioSys = {
   },
 
   toggleMute: function () {
-    this.muted = !this.muted;
-    if (this.ready) {
-      this.master.gain.value = this.muted ? 0 : 0.5;
-    }
+    Settings.data.muted = !Settings.data.muted;
+    Settings.save();
+    this.applyVolumes();
     return this.muted;
   },
 
   toggleMusic: function () {
-    this.musicOn = !this.musicOn;
-    if (this.musicGain) this.musicGain.gain.setTargetAtTime(this.musicOn ? 0.42 : 0, this.ctx.currentTime, 0.2);
+    Settings.data.musicOn = !Settings.data.musicOn;
+    Settings.save();
+    this.applyVolumes();
     return this.musicOn;
   },
 
@@ -129,6 +162,8 @@ const AudioSys = {
   melody: [76, null, 74, 72, null, 69, 72, null, 71, null, 69, 67, null, 64, 67, null,
     72, null, 74, 77, null, 76, 74, null, 72, null, 71, 69, null, 71, null, null],
   chords: [48, 45, 41, 43],
+
+// ---- generative music loop (lookahead scheduler) ------------------
 
   startMusic: function () {
     if (!this.ready || this.timer) return;

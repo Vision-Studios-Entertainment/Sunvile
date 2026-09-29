@@ -1,4 +1,58 @@
 <!DOCTYPE html>
+<!--
+  SUNVALE — a cozy pixel farm game. Vanilla JS, no build step, no deps, no assets.
+  Open this file directly, or serve the folder over HTTP (npx http-server /
+  python -m http.server). Browsing via file:// works, but Chrome logs
+  "'file:' URLs are treated as unique security origins" for anything framed.
+
+  ARCHITECTURE ------------------------------------------------------------
+  Classic <script> tags, no modules: every file shares ONE global scope, so
+  load order below IS the dependency graph. Adding a file = adding a tag here,
+  in the right place.
+
+    art-data.js   ART        ASCII pixel-art grids + palettes (pure data)
+    data.js       T, ITEMS,  all tunables / static content tables (pure data)
+                  CROPS, NPC_DEFS, STORY, MAIL_*, ...
+    story.js      Story      chapter + objective state machine
+    sprites.js    Sprites,   builds every canvas sprite at boot from ART;
+                  PixelFont  also owns the bitmap font
+    world.js      World      procedural maps, tiles, collision grids, save blob
+    entities.js   Player,    player movement, particle FX, NPC/chicken AI,
+                  FX         nearestInteract() lookup used by Game.interact()
+    audio.js      AudioSys   WebAudio SFX + generative music (no audio files)
+    game.js       Game       THE state machine: time, money, inventory, save
+    render.js     Renderer   2D canvas renderer: camera, lighting, weather
+    ui.js         UI         canvas-drawn HUD/menus + immediate-mode regions
+    main.js       Input,     boot(), RAF loop, key/mouse routing, smoke test
+                  boot()
+
+  RUN IT ------------------------------------------------------------------
+    Title screen: Enter/Space starts. `?auto=1` skips straight into gameplay.
+    `?test=1` runs runSmokeTest() (main.js) and writes PASS/FAIL lines into
+    document.title — that is how headless checks read the result:
+      chrome --headless=new --virtual-time-budget=6000 --dump-dom \
+        "file:///.../index.html?test=1"
+    Other params: ?day= &hour= &menu=shop|inv|pause|help|talk
+
+  RULES FOR FUTURE SESSIONS -----------------------------------------------
+    * No bundler/transpiler — ES2017-era syntax only, no import/export.
+    * Everything hangs off globals (Game, World, UI, Renderer...). Search for
+      the object name, not for exports.
+    * If you add a field to Game: persist it in Game.save() AND restore it in
+      Game.continueGame(), or it silently resets on reload.
+    * Art is generated at runtime from ART strings — never add image/audio
+      files; sprites.js draws them onto canvases at boot.
+    * Only the scripts listed above are live. Files sitting in js/ that are
+      NOT loaded yet: i18n.js (blocked by a `T` name clash with data.js),
+      lang-*.js, settings.js, loader.js, rpc.js, touch.js, sheet.js. Do not
+      assume their code runs — and if you wire one in, add its <script> tag
+      in dependency order and re-run ?test=1.
+
+  VERIFY AFTER ANY CHANGE -----------------------------------------------
+      chrome --headless=new --virtual-time-budget=6000 --dump-dom \
+        "file:///.../index.html?test=1"   (PASS/FAIL lands in <title>)
+      node tools/preview.js               (player art row widths)
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -14,8 +68,10 @@
 <script src="js/sprites.js"></script>
 <script src="js/world.js"></script>
 <script src="js/entities.js"></script>
+<script src="js/settings.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/game.js"></script>
+<script src="js/rpc.js"></script>
 <script src="js/render.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>

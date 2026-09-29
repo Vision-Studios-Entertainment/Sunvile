@@ -1,3 +1,31 @@
+/* GAME — the central state machine. Single global object `Game`.
+
+   State fields every other file reads: state ('title'|'play'|'dialogue'|
+   'inventory'|'shop'|'mail'|'pause'|'sleep'), day/timeMin/weather/money/
+   energy, inv/chest, mail, friendship, dialogue, fade.
+
+   Layout (top to bottom)
+     lifecycle   init/newGame/continueGame/save/peekSave
+                 -- NEW FIELD? It must be written in save() and read back in
+                    continueGame(), or it resets on every reload --
+     clock       rollWeather/weatherName/clockText
+     inventory   addItem/countItem/removeItem/selItem/useEnergy/frontTile
+     tool use    use/swing/useHoe/useCan/useAxe/usePick/plantSeed/harvest/eat
+                 -- every tool path must go through useEnergy() and call
+                    World.rebuildGrid('farm') after changing props --
+     mail        welcomeMail..deliverMail: letters, attachments, requests
+     social      befriend/giftGain/giveGift (friendship + milestone gifts)
+     interaction interact() switches on nearestInteract().kind — this is the
+                 single dispatch point for E; say()/advanceDialogue() run the
+                 typewriter dialogue box
+     economy     openShop/buy/sellSlot/sellAll
+     day cycle   startSleep/advanceDay/passOut (crops, weather, eggs, respawns)
+     frame       update() — the per-tick entry point called by main.js
+
+   Save format lives entirely in save()/continueGame(): JSON under
+   SAVE_KEY in localStorage, `v: 1` schema version. Bump `v` if you change
+   the shape and add a migration there, not in the callers. */
+
 const SAVE_KEY = 'sunvale_save_v1';
 
 const Game = {
@@ -10,6 +38,8 @@ const Game = {
   fade: 0, fadeDir: 0, sleepT: 0, sleepReason: '',
   hasSave: false, clockAcc: 0, hint: 0, flash: 0,
   hoveredSlot: null, msg: null, msgT: 0,
+
+// ==== lifecycle: boot, new game, save/load ==========================
 
   init: function () {
     this.inv = new Array(30).fill(null);
@@ -117,6 +147,8 @@ const Game = {
     catch (e) { FX.toast('SAVE FAILED', '#e0453f'); }
   },
 
+// ==== clock: weather + time of day =================================
+
   rollWeather: function () {
     const r = Math.random();
     if (r < 0.55) return 'sunny';
@@ -138,6 +170,8 @@ const Game = {
   },
 
   stackMax: function (id) { return ITEMS[id] && ITEMS[id].k === 'tool' ? 1 : 99; },
+
+// ==== inventory & energy ===========================================
 
   addItem: function (id, n) {
     n = n || 1;
@@ -190,6 +224,8 @@ const Game = {
     const f = Player.front();
     return { x: Math.floor(f.x / TILE), y: Math.floor(f.y / TILE) };
   },
+
+// ==== tool use & farming actions ===================================
 
   use: function () {
     if (this.state !== 'play') return;
@@ -405,6 +441,8 @@ const Game = {
     return true;
   },
 
+// ==== mail: letters, attachments, village requests =================
+
   welcomeMail: function () {
     return {
       from: 'SUNVALE POST', subject: 'WELCOME TO SUNVALE',
@@ -541,6 +579,8 @@ const Game = {
 
   friendshipHearts: function (id) { return Math.floor(this.friendshipOf(id) / 20); },
 
+// ==== social: friendship + gifts ===================================
+
   befriend: function (id, amt) {
     const def = NPC_DEFS.find(function (d) { return d.id === id; });
     if (!def) return;
@@ -603,6 +643,8 @@ const Game = {
   },
 
   hinted: function (k) { },
+
+// ==== interaction dispatch (E) + dialogue ==========================
 
   interact: function () {
     if (this.state !== 'play') return;
@@ -704,6 +746,8 @@ const Game = {
     } else AudioSys.play('select');
   },
 
+// ==== economy: shop =================================================
+
   openShop: function () {
     this.state = 'shop';
     this.shopTab = 'buy';
@@ -761,6 +805,8 @@ const Game = {
     FX.toast('SOLD EVERYTHING FOR ' + total + 'G', '#f7e07a');
     AudioSys.play('coin');
   },
+
+// ==== day cycle: sleep, advance day, pass out ======================
 
   startSleep: function () {
     this.state = 'sleep';
@@ -845,6 +891,8 @@ const Game = {
     this.startSleep();
   },
 
+// ==== frame update ==================================================
+
   update: function (dt) {
     FX.update(dt);
     if (this.msgT > 0) { this.msgT -= dt; if (this.msgT <= 0) this.msg = null; }
@@ -893,6 +941,8 @@ const Game = {
       this.passOut();
     }
   },
+
+// ==== hotbar helpers ===============================================
 
   selectSlot: function (i) {
     if (i < 0 || i > 9) return;

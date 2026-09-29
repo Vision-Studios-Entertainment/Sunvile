@@ -1,3 +1,15 @@
+/* STORY — chapter/objective progression for the campaign.
+   Reads STORY[] from data.js (chapter defs) and pushes results back onto
+   Game (rewards via Game's mail/shop helpers) — it is the only place that
+   knows how chapters advance.
+
+   Flow: tick() is called from Game as events fire (onHarvest/onCook/onSell/
+   noteTalk). Use objectiveLabel() + objectiveProgress() for the HUD line.
+   state: i = current chapter index, done = campaign finished,
+   introShown = which chapter intros already played.
+   Persist with Game.save(): serialise()/applySave() carry this across
+   sessions — a new field here must be added there too. */
+
 const Story = {
   i: 0, introShown: {}, done: false, busy: false,
   stats: { harvested: 0, cooked: 0, sold: 0 },
@@ -19,6 +31,8 @@ const Story = {
     for (const d of NPC_DEFS) if (d.id === id) return d;
     return null;
   },
+
+// ---- objective helpers --------------------------------------------
 
   objectiveLabel: function (o) {
     if (o.type === 'talk') {
@@ -72,6 +86,8 @@ const Story = {
     if (Game.state !== 'play') return;
     if (this.ready()) this.complete();
   },
+
+// ---- event hooks (called by Game) ---------------------------------
 
   onHarvest: function () { this.stats.harvested += 1; },
   onCook: function () { this.stats.cooked += 1; },
@@ -139,6 +155,8 @@ const Story = {
       if (g) Game.say(g.name.toUpperCase(), g.palette, ch.outro.slice(), g.id);
     }
   },
+
+// ---- persistence ---------------------------------------------------
 
   serialize: function () {
     return { i: this.i, done: this.done, intro: this.introShown, stats: this.stats };

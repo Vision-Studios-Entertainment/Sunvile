@@ -1,7 +1,39 @@
+/* WORLD — procedural maps, tiles and collision.
+
+   World API (used by everyone else)
+     init(seed)          rebuilds maps.farm/house/shop and their grids
+     map()               the map the player is currently on
+     tileAt/setTile      read/write a tile id (m = map name, null = current)
+     solidTile           wall/water/fence test used by movement + tools
+     propAt              objects standing on a tile (trees, rocks, signs...)
+     rebuildGrid(name)   rebuild the spatial lookup after a prop changes
+     farmable(x,y)       inside the tilled field rect (FARMABLE in data.js)
+     serialize/applySave World blob for the save file
+
+   Layout
+     World object       public API above
+     helpers            mkMap/addProp/baseSpriteProp, noiseHash/noise2/fbm2
+                        (value noise -> organic terrain), shuffleArr
+     genFarm            big one: terrain, water, field, props, NPCs, chickens
+     genHouse / genShop interiors
+     propSprite         picks the right Sprites.* canvas for a prop
+
+   Contracts
+     * World.init() assigns this.maps.<name> = gen<Name>() — EVERY map it
+       assigns needs a generator defined in this file, or boot dies with
+       "ReferenceError: <gen> is not defined". New maps also need doors/
+       entrances in the other maps and a spawn point in Game.interact().
+     * World.maps[<name>] shape is what Game.save() serialises — renaming a
+       map or a prop type breaks old saves.
+     * After any prop mutation (chop/mine/kill) call rebuildGrid() or
+       collision and interaction lookups go stale. */
+
 const World = {
   seed: 1337,
   maps: {},
   current: 'farm',
+
+// ==== public API ====================================================
 
   map: function () { return this.maps[this.current]; },
 
@@ -10,6 +42,8 @@ const World = {
     this.maps.farm = genFarm(seed);
     this.maps.house = genHouse();
     this.maps.shop = genShop();
+    this.maps.tavern = genTavern();
+    this.maps.hall = genHall();
     for (const k in this.maps) this.rebuildGrid(k);
   },
 
@@ -85,6 +119,8 @@ const World = {
   }
 };
 
+// ==== helpers: map scaffolding, noise, shuffling ===================
+
 function mkMap(w, h, fill) {
   return {
     w: w, h: h,
@@ -148,6 +184,8 @@ function shuffleArr(arr, r) {
   return arr;
 }
 
+// ==== procedural map generation ====================================
+
 function genFarm(seed) {
   const s = seed >>> 0;
   const r = rngf(s);
@@ -181,7 +219,9 @@ function genFarm(seed) {
     { x0: 8, y0: 12, x1: 48, y1: 16 },
     { x0: 9, y0: 23, x1: 11, y1: 26 },
     { x0: 20, y0: 16, x1: 44, y1: 19 },
-    { x0: 45, y0: 32, x1: 50, y1: 37 }
+    { x0: 45, y0: 32, x1: 50, y1: 37 },
+    { x0: 17, y0: 3, x1: 28, y1: 13 },
+    { x0: 29, y0: 3, x1: 40, y1: 13 }
   ];
   function reserved(x, y) {
     for (let i = 0; i < RES.length; i++) {
@@ -232,66 +272,155 @@ function genFarm(seed) {
     }
   }
 
-  function rect(x0, y0, x1, y1, t) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) continue;
-      m.tiles[y * MAP_W + x] = t;
+  function block(x0, y0, x1, y1) {
+    for (let y = Math.max(0, y0); y <= Math.min(MAP_H - 1, y1); y++) {
+      for (let x = Math.max(0, x0); x <= Math.min(MAP_W - 1, x1); x++) {
+        occ[y * MAP_W + x] = 1;
+      }
     }
   }
-
-  const pond = { cx: 50, cy: 44, rx: 7.5, ry: 5.5 };
-  for (let y = 36; y <= 53; y++) for (let x = 40; x <= 60; x++) {
-    const dx = (x - pond.cx) / pond.rx, dy = (y - pond.cy) / pond.ry;
-    const d = dx * dx + dy * dy;
-    if (d <= 1) m.tiles[y * MAP_W + x] = T.WATER;
-    else if (d <= 1.45) if (m.tiles[y * MAP_W + x] !== T.WATER) m.tiles[y * MAP_W + x] = T.SAND;
-  }
-
-  rect(8, 14, 47, 15, T.PATH);
-  rect(10, 12, 11, 15, T.PATH);
-  rect(46, 12, 47, 15, T.PATH);
-  rect(19, 15, 20, 23, T.PATH);
-  rect(45, 15, 46, 19, T.PATH);
-  rect(21, 16, 45, 17, T.PATH);
-  rect(12, 12, 23, 13, T.PATH);
 
   function fenceRect(x0, y0, x1, y1, gates) {
+    const gs = gates || [];
+    function put(x, y) {
+      if (!freeAt(x, y)) return;
+      m.tiles[y * MAP_W + x] = T.FENCE;
+      occ[y * MAP_W + x] = 1;
+    }
     for (let x = x0; x <= x1; x++) {
-      let skipTop = false, skipBot = false;
-      (gates || []).forEach(function (g) {
-        if (g.edge === 'top' && x >= g.x0 && x <= g.x1) skipTop = true;
-        if (g.edge === 'bottom' && x >= g.x0 && x <= g.x1) skipBot = true;
-      });
-      if (!skipTop) m.tiles[y0 * MAP_W + x] = T.FENCE;
-      if (!skipBot) m.tiles[y1 * MAP_W + x] = T.FENCE;
+      if (!gs.some(function (g) { return g.edge === 'top' && x >= g.x0 && x <= g.x1; })) put(x, y0);
+      if (!gs.some(function (g) { return g.edge === 'bottom' && x >= g.x0 && x <= g.x1; })) put(x, y1);
     }
     for (let y = y0; y <= y1; y++) {
-      let skipL = false, skipR = false;
-      (gates || []).forEach(function (g) {
-        if (g.edge === 'left' && y >= g.y0 && y <= g.y1) skipL = true;
-        if (g.edge === 'right' && y >= g.y0 && y <= g.y1) skipR = true;
-      });
-      if (!skipL) m.tiles[y * MAP_W + x0] = T.FENCE;
-      if (!skipR) m.tiles[y * MAP_W + x1] = T.FENCE;
+      if (!gs.some(function (g) { return g.edge === 'left' && y >= g.y0 && y <= g.y1; })) put(x0, y);
+      if (!gs.some(function (g) { return g.edge === 'right' && y >= g.y0 && y <= g.y1; })) put(x1, y);
     }
   }
 
-  fenceRect(7, 21, 34, 47, [{ edge: 'top', x0: 19, x1: 20 }]);
-  fenceRect(38, 18, 48, 30, [{ edge: 'top', x0: 45, x1: 46 }]);
-
-  const occ = {};
-  function block(x0, y0, x1, y1) {
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) occ[x + ',' + y] = 1;
+  function penFree(x0, y0, x1, y1) {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (!inMap(x, y) || reserved(x, y) || taken(x, y) || !grassT(x, y)) return false;
+      }
+    }
+    return true;
   }
-  block(6, 3, 16, 13);
-  block(42, 3, 52, 13);
-  block(39, 19, 45, 23);
-  block(6, 12, 48, 16);
-  block(6, 20, 35, 48);
-  block(37, 17, 49, 31);
-  block(39, 36, 60, 53);
-  block(17, 11, 24, 24);
-  block(44, 14, 47, 20);
+
+  const fieldGate = 14 + ((r() * 17) | 0);
+  const fieldGap = 30 + ((r() * 14) | 0);
+  fenceRect(7, 21, 34, 47, [
+    { edge: 'top', x0: fieldGate, x1: fieldGate + 1 },
+    { edge: 'right', y0: fieldGap, y1: fieldGap + 1 }
+  ]);
+
+  const coopGate = 43 + ((r() * 5) | 0);
+  fenceRect(38, 18, 48, 30, [
+    { edge: 'top', x0: coopGate, x1: Math.min(47, coopGate + 1) }
+  ]);
+
+  const BANDS = [
+    { x0: 3, y0: 49, x1: 34, y1: 57 },
+    { x0: 49, y0: 4, x1: 58, y1: 17 },
+    { x0: 17, y0: 4, x1: 40, y1: 11 },
+    { x0: 36, y0: 33, x1: 58, y1: 43 }
+  ];
+  let pens = 1 + ((r() * 2) | 0);
+  for (let a = 0; a < 24 && pens > 0; a++) {
+    const b = BANDS[(r() * BANDS.length) | 0];
+    const w = 6 + ((r() * 8) | 0);
+    const h = 4 + ((r() * 4) | 0);
+    if (b.x1 - b.x0 < w + 1 || b.y1 - b.y0 < h + 1) continue;
+    const x0 = b.x0 + ((r() * (b.x1 - b.x0 - w)) | 0);
+    const y0 = b.y0 + ((r() * (b.y1 - b.y0 - h)) | 0);
+    const x1 = x0 + w, y1 = y0 + h;
+    if (!penFree(x0 - 1, y0 - 1, x1 + 1, y1 + 1)) continue;
+    const ge = (r() * 4) | 0;
+    let gate;
+    if (ge < 2) {
+      const gx = x0 + 1 + ((r() * Math.max(1, w - 1)) | 0);
+      gate = { edge: ge === 0 ? 'top' : 'bottom', x0: gx, x1: Math.min(x1, gx + 1) };
+    } else {
+      const gy = y0 + 1 + ((r() * Math.max(1, h - 1)) | 0);
+      gate = { edge: ge === 2 ? 'left' : 'right', y0: gy, y1: Math.min(y1, gy + 1) };
+    }
+    fenceRect(x0, y0, x1, y1, [gate]);
+    pens--;
+  }
+
+  function pathable(x, y) {
+    if (!inMap(x, y)) return false;
+    const t = m.tiles[y * MAP_W + x];
+    return t !== T.WATER && t !== T.SAND;
+  }
+  function path(x, y) {
+    if (!pathable(x, y)) return false;
+    m.tiles[y * MAP_W + x] = T.PATH;
+    occ[y * MAP_W + x] = 1;
+    return true;
+  }
+  function pathRect(x0, y0, x1, y1) {
+    for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
+      for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) path(x, y);
+    }
+  }
+
+  pathRect(8, 14, 47, 15);
+  pathRect(10, 12, 11, 15);
+  pathRect(46, 12, 47, 15);
+  pathRect(22, 12, 23, 13);
+  pathRect(34, 12, 35, 13);
+
+  const spineX = 35 + ((r() * 2) | 0);
+  const reachY = Math.max(20, Math.min(56, Math.round(pcy)));
+  for (let y = 16; y <= reachY; y++) {
+    if (!path(spineX, y)) break;
+    path(spineX + 1, y);
+  }
+  let hitR = -1, hitL = -1;
+  for (let x = spineX + 2; x <= MAP_W - 3; x++) if (!pathable(x, reachY)) { hitR = x; break; }
+  for (let x = spineX - 1; x >= 2; x--) if (!pathable(x, reachY)) { hitL = x; break; }
+  let dir = 0;
+  if (hitR >= 0 && (hitL < 0 || hitR - spineX <= spineX - hitL)) dir = 1;
+  else if (hitL >= 0) dir = -1;
+  if (dir) {
+    let hx = spineX + (dir > 0 ? 2 : -1);
+    while (dir > 0 ? hx <= MAP_W - 3 : hx >= 2) {
+      if (!path(hx, reachY)) break;
+      hx += dir;
+    }
+  }
+
+  const fieldX = 14 + ((r() * 17) | 0);
+  for (let y = 16; y <= 21; y++) {
+    if (!path(fieldX, y)) break;
+    path(fieldX + 1, y);
+  }
+  if (r() < 0.5) {
+    const arm = 2 + ((r() * 5) | 0);
+    const ad = r() < 0.5 ? -1 : 1;
+    for (let k = 1; k <= arm; k++) path(fieldX + ad * k, 17);
+  }
+
+  const coopX = 44 + ((r() * 4) | 0);
+  for (let y = 16; y <= 19; y++) {
+    if (!path(coopX, y)) break;
+    path(coopX + 1, y);
+  }
+  for (let x = 40; x <= coopX + 1; x++) path(x, 19);
+
+  const spurN = 2 + ((r() * 3) | 0);
+  for (let i = 0; i < spurN; i++) {
+    const up = r() < 0.35;
+    const sx = up ? 18 + ((r() * 23) | 0) : 12 + ((r() * 36) | 0);
+    const len = 2 + ((r() * 4) | 0);
+    const ya = up ? 13 : 16, yb = up ? 13 - len : 16 + len;
+    for (let y = Math.min(ya, yb); y <= Math.max(ya, yb); y++) if (!path(sx, y)) break;
+    if (r() < 0.5) {
+      const ad = r() < 0.5 ? -1 : 1;
+      const arm = 2 + ((r() * 5) | 0);
+      for (let k = 1; k <= arm; k++) path(sx + ad * k, yb);
+    }
+  }
 
   const house = baseSpriteProp(m, 'building', Sprites.builds.house, 6, 4, 10, 8, {
     ox: 6 * TILE - 4, oy: 12 * TILE - 132, spriteName: 'house'
@@ -314,6 +443,30 @@ function genFarm(seed) {
   m.lights.push({ x: shop.ox + 85, y: shop.oy + 112, r: 40, c: '#ffca80' });
   m.lights.push({ x: shop.ox + 84, y: shop.oy + 71, r: 46, c: '#a8f0e0' });
 
+  const tavern = baseSpriteProp(m, 'building', Sprites.builds.tavern, 18, 4, 10, 8, {
+    ox: 18 * TILE - 4, oy: 12 * TILE - 132, spriteName: 'tavern'
+  });
+  tavern.interact = 'door'; tavern.target = 'tavern';
+  tavern.spawn = { x: 22 * TILE + 8, y: 13 * TILE };
+  tavern.doorTiles = [[22, 11], [23, 11]];
+  block(18, 4, 27, 11);
+  m.lights.push({ x: tavern.ox + 36, y: tavern.oy + 103, r: 52, c: '#ffd0a0' });
+  m.lights.push({ x: tavern.ox + 130, y: tavern.oy + 103, r: 52, c: '#ffd0a0' });
+  m.lights.push({ x: tavern.ox + 85, y: tavern.oy + 112, r: 44, c: '#ffca80' });
+  m.lights.push({ x: tavern.ox + 67, y: tavern.oy + 88, r: 26, c: '#ffd9a0' });
+  m.lights.push({ x: tavern.ox + 101, y: tavern.oy + 88, r: 26, c: '#ffd9a0' });
+
+  const hall = baseSpriteProp(m, 'building', Sprites.builds.hall, 30, 4, 10, 8, {
+    ox: 30 * TILE - 4, oy: 12 * TILE - 132, spriteName: 'hall'
+  });
+  hall.interact = 'door'; hall.target = 'hall';
+  hall.spawn = { x: 34 * TILE + 8, y: 13 * TILE };
+  hall.doorTiles = [[34, 11], [35, 11]];
+  block(30, 4, 39, 11);
+  m.lights.push({ x: hall.ox + 34, y: hall.oy + 103, r: 52, c: '#e8ffd0' });
+  m.lights.push({ x: hall.ox + 132, y: hall.oy + 103, r: 52, c: '#e8ffd0' });
+  m.lights.push({ x: hall.ox + 85, y: hall.oy + 112, r: 44, c: '#ffca80' });
+
   const coop = baseSpriteProp(m, 'building', Sprites.builds.coop, 39, 20, 6, 4, {
     ox: 39 * TILE - 4, oy: 24 * TILE - 76, spriteName: 'coop'
   });
@@ -321,69 +474,89 @@ function genFarm(seed) {
   function place(type, sprite, x, y, extra) {
     const p = baseSpriteProp(m, type, sprite, x, y, 1, 1, extra);
     p.dirty = true;
-    block(x, y, x, y);
+    occ[y * MAP_W + x] = 1;
     return p;
   }
 
-  place('mailbox', Sprites.props.mailbox, 13, 12, { interact: 'mailbox', text: null });
-  place('sign', Sprites.props.sign, 16, 13, { interact: 'sign', text: 'WELCOME TO SUNVALE FARM' });
-  place('sign', Sprites.props.sign_small, 44, 13, { interact: 'sign', text: 'GENERAL STORE - SEEDS AND SUPPLIES' });
-
-  for (const lx of [25, 33, 41]) {
-    const p = place('lamp', Sprites.props.lamp, lx, 13, { solid: false, oy: 14 * TILE - 26 });
-    m.lights.push({ x: lx * TILE + 8, y: 14 * TILE - 14, r: 58, c: '#ffd9a0', on: true });
-  }
-  place('lamp', Sprites.props.lamp, 21, 19, { solid: false, oy: 20 * TILE - 26 });
-  m.lights.push({ x: 21 * TILE + 8, y: 20 * TILE - 14, r: 58, c: '#ffd9a0', on: true });
-  place('lamp', Sprites.props.lamp, 47, 16, { solid: false, oy: 17 * TILE - 26 });
-  m.lights.push({ x: 47 * TILE + 8, y: 17 * TILE - 14, r: 58, c: '#ffd9a0', on: true });
-
-  place('trough', Sprites.props.trough, 41, 26, { oy: 27 * TILE - 12 });
-  place('scarecrow', Sprites.props.scarecrow, 32, 23, {});
-  place('barrel', Sprites.props.barrel, 16, 10, {});
-  place('crate', Sprites.props.crate, 42, 10, {});
-  place('pot', Sprites.props.pot, 17, 11, { solid: false });
-
-  const zones = [
-    { x0: 1, y0: 2, x1: 5, y1: 57, w: 3 },
-    { x0: 54, y0: 2, x1: 58, y1: 36, w: 2 },
-    { x0: 2, y0: 1, x1: 57, y1: 3, w: 2 },
-    { x0: 2, y0: 51, x1: 57, y1: 58, w: 3 },
-    { x0: 35, y0: 34, x1: 37, y1: 47, w: 2 },
-    { x0: 49, y0: 19, x1: 58, y1: 34, w: 2 },
-    { x0: 26, y0: 49, x1: 38, y1: 50, w: 1 }
-  ];
-
-  function free(x, y) {
-    if (x < 1 || y < 1 || x >= MAP_W - 1 || y >= MAP_H - 1) return false;
-    if (occ[x + ',' + y]) return false;
-    const t = m.tiles[y * MAP_W + x];
-    return t === T.GRASS || t === T.GRASS2 || t === T.WILDFLOWER;
+  function placeFree(type, sprite, cands, extra) {
+    const list = shuffleArr(cands.slice(), r);
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (!freeAt(c[0], c[1])) continue;
+      const ex = typeof extra === 'function' ? extra(c[0], c[1]) : extra;
+      return place(type, sprite, c[0], c[1], ex);
+    }
+    return null;
   }
 
-  for (const z of zones) {
-    for (let i = 0; i < 90; i++) {
-      const x = z.x0 + ((r() * (z.x1 - z.x0 + 1)) | 0);
-      const y = z.y0 + ((r() * (z.y1 - z.y0 + 1)) | 0);
-      if (!free(x, y)) continue;
+  function grid(x0, y0, x1, y1) {
+    const out = [];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push([x, y]);
+    return out;
+  }
+
+  placeFree('mailbox', Sprites.props.mailbox, [[12, 12], [13, 12], [14, 12], [12, 13], [14, 13], [15, 12]],
+    { interact: 'mailbox', text: null });
+  placeFree('sign', Sprites.props.sign, [[15, 13], [16, 13], [17, 13], [14, 13], [13, 13]],
+    { interact: 'sign', text: 'WELCOME TO SUNVALE FARM' });
+  placeFree('sign', Sprites.props.sign_small, [[44, 13], [43, 13], [45, 13], [42, 13], [41, 13]],
+    { interact: 'sign', text: 'GENERAL STORE - SEEDS AND SUPPLIES' });
+
+  const qboard = baseSpriteProp(m, 'board', Sprites.props.board, 17, 13, 2, 1, {
+    interact: 'board', text: null
+  });
+  occ[13 * MAP_W + 17] = 1;
+  occ[13 * MAP_W + 18] = 1;
+
+  const lampPool = [];
+  for (let x = 12; x <= 45; x++) lampPool.push(x);
+  shuffleArr(lampPool, r);
+  const lamps = [];
+  const lampN = 4 + ((r() * 3) | 0);
+  for (let i = 0; i < lampPool.length && lamps.length < lampN; i++) {
+    const lx = lampPool[i];
+    if (lamps.some(function (v) { return Math.abs(v - lx) < 5; })) continue;
+    const ly = r() < 0.5 ? 13 : 16;
+    if (!freeAt(lx, ly)) continue;
+    place('lamp', Sprites.props.lamp, lx, ly, { solid: false, oy: (ly + 1) * TILE - 26 });
+    m.lights.push({ x: lx * TILE + 8, y: (ly + 1) * TILE - 14, r: 58, c: '#ffd9a0', on: true });
+    lamps.push(lx);
+  }
+
+  placeFree('barrel', Sprites.props.barrel, grid(17, 9, 20, 13), {});
+  placeFree('crate', Sprites.props.crate, grid(37, 9, 40, 13), {});
+  placeFree('pot', Sprites.props.pot, grid(12, 13, 45, 16), { solid: false });
+  placeFree('scarecrow', Sprites.props.scarecrow, grid(13, 25, 30, 44), {});
+  placeFree('trough', Sprites.props.trough, [[41, 26], [42, 26], [46, 26], [45, 27], [43, 28]],
+    function (x, y) { return { oy: (y + 1) * TILE - 12 }; });
+
+  let trees = 0, rocks = 0, bushes = 0;
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      const i = y * MAP_W + x;
+      if (occ[i] || reserved(x, y) || !grassT(x, y)) continue;
+      const edge = Math.min(x, y, MAP_W - 1 - x, MAP_H - 1 - y);
+      let d = edge <= 1 ? 0.75 : edge <= 3 ? 0.42 : edge <= 7 ? 0.16 : 0.05;
+      d += (fbm2(x, y, s + 131, 6, 2) - 0.45) * 0.55;
+      if (wet[i]) d += 0.28;
+      if (d <= 0 || r() >= d) continue;
       const roll = r();
-      if (roll < 0.62) {
-        const v = (r() * Sprites.props.tree.length) | 0;
-        const p = addProp(m, {
+      if (roll < 0.6) {
+        if (trees >= 140) continue;
+        const pine = r() < 0.38;
+        const v = (r() * (pine ? Sprites.props.pine.length : Sprites.props.tree.length)) | 0;
+        addProp(m, pine ? {
+          type: 'tree', sprite: Sprites.props.pine[v], variant: v,
+          tx: x, ty: y, w: 1, h: 1, hp: 5, maxHp: 5, state: 'full',
+          ox: x * TILE - 4, oy: (y + 1) * TILE - 36, kind: 'pine', dirty: true
+        } : {
           type: 'tree', sprite: Sprites.props.tree[v], variant: v,
           tx: x, ty: y, w: 1, h: 1, hp: 4, maxHp: 4, state: 'full',
           ox: x * TILE - 5, oy: (y + 1) * TILE - 34, kind: 'oak', dirty: true
         });
-        block(x, y, x, y);
+        occ[i] = 1; trees++;
       } else if (roll < 0.86) {
-        const v = (r() * Sprites.props.pine.length) | 0;
-        const p = addProp(m, {
-          type: 'tree', sprite: Sprites.props.pine[v], variant: v,
-          tx: x, ty: y, w: 1, h: 1, hp: 5, maxHp: 5, state: 'full',
-          ox: x * TILE - 4, oy: (y + 1) * TILE - 36, kind: 'pine', dirty: true
-        });
-        block(x, y, x, y);
-      } else if (roll < 0.94) {
+        if (rocks >= 60) continue;
         const v = (r() * Sprites.props.rock.length) | 0;
         const ore = r() < 0.18;
         addProp(m, {
@@ -392,23 +565,18 @@ function genFarm(seed) {
           state: 'full', ox: x * TILE - 1, oy: (y + 1) * TILE - 16,
           kind: ore ? 'ore' : 'rock', dirty: true
         });
-        block(x, y, x, y);
+        occ[i] = 1; rocks++;
       } else {
+        if (bushes >= 30) continue;
         const v = (r() * 2) | 0;
         addProp(m, {
           type: 'bush', sprite: Sprites.props.bush_berry[v], variant: v,
           tx: x, ty: y, w: 1, h: 1, hp: 1, maxHp: 1, state: 'full', ready: true, timer: 0,
           ox: x * TILE - 1, oy: (y + 1) * TILE - 14, interact: 'bush', dirty: true
         });
-        block(x, y, x, y);
+        occ[i] = 1; bushes++;
       }
     }
-  }
-
-  for (let i = 0; i < 40; i++) {
-    const x = 2 + ((r() * (MAP_W - 4)) | 0), y = 2 + ((r() * (MAP_H - 4)) | 0);
-    if (!free(x, y)) continue;
-    if (r() < 0.4) m.tiles[y * MAP_W + x] = T.WILDFLOWER;
   }
 
   const npcs = [];
@@ -452,7 +620,7 @@ function genHouse() {
   const bed = place('bed', Sprites.props.bed, 13, 1, 1, 2, { interact: 'bed' });
   place('tv', Sprites.props.tv, 2, 1, 1, 1, { interact: 'tv', oy: 2 * TILE - 16 });
   place('fridge', Sprites.props.fridge, 1, 1, 1, 1, {});
-  place('stove', Sprites.props.stove, 4, 1, 1, 1, {});
+  place('stove', Sprites.props.stove, 4, 1, 1, 1, { interact: 'stove' });
   place('table', Sprites.props.table, 7, 4, 2, 1, { oy: 5 * TILE - 22 });
   place('chair', Sprites.props.chair, 6, 4, 1, 1, { oy: 5 * TILE - 20 });
   place('chest', Sprites.props.chest, 2, 9, 1, 1, { interact: 'chest', oy: 10 * TILE - 16 });
@@ -503,9 +671,122 @@ function genShop() {
     tx: 6, ty: 5, state: 'idle', wait: 2, talked: false, moving: false,
     prevX: 6, prevY: 5, range: d.range
   }];
+  NPC_DEFS.filter(function (n) { return n.map === 'shop' && n.id !== 'juniper'; }).forEach(function (n) {
+    m.npcs.push({
+      def: n, x: n.home.x * TILE, y: n.home.y * TILE, dir: 'down', frame: 0, anim: 0,
+      tx: n.home.x, ty: n.home.y, state: 'idle', wait: 1 + Math.random() * 2,
+      talked: false, moving: false, prevX: n.home.x, prevY: n.home.y, range: n.range
+    });
+  });
 
   m.lights.push({ x: 4 * TILE, y: 3 * TILE, r: 64, c: '#fff0c9', on: true });
   m.lights.push({ x: 11 * TILE, y: 3 * TILE, r: 64, c: '#fff0c9', on: true });
+  return m;
+}
+
+// ==== prop -> sprite lookup =======================================
+
+function genTavern() {
+  const m = mkMap(16, 12, T.FLOOR);
+  m.name = 'The Hearth Tavern';
+  for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
+  for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
+  for (let y = 6; y <= 7; y++) for (let x = 3; x <= 8; x++) m.tiles[y * 16 + x] = T.RUG;
+
+  function place(type, sprite, x, y, w, h, extra) {
+    const p = baseSpriteProp(m, type, sprite, x, y, w || 1, h || 1, extra);
+    p.dirty = true;
+    return p;
+  }
+
+  addProp(m, {
+    type: 'door', tx: 7, ty: 11, w: 1, h: 1, solid: true, interact: 'exit',
+    target: 'farm', spawn: { x: 22 * TILE + 8, y: 13 * TILE }, sprite: null
+  });
+
+  place('fireplace', Sprites.props.fireplace, 2, 1, 2, 1, { oy: 2 * TILE - 34 });
+  place('stove', Sprites.props.stove, 13, 1, 1, 1, { interact: 'stove' });
+  place('shelf', Sprites.props.shelf, 6, 1, 1, 1, { oy: 2 * TILE - 22, w: 3, h: 1 });
+  m.props[m.props.length - 1].w = 3;
+  for (let x = 1; x <= 7; x++) {
+    place('counter', Sprites.props.counter, x, 5, 1, 1, { oy: 6 * TILE - 22 });
+  }
+  place('table', Sprites.props.table, 4, 8, 2, 1, { oy: 9 * TILE - 22 });
+  place('chair', Sprites.props.chair, 3, 8, 1, 1, { oy: 9 * TILE - 20 });
+  place('chair', Sprites.props.chair, 6, 8, 1, 1, { oy: 9 * TILE - 20 });
+  place('table', Sprites.props.table, 10, 7, 2, 1, { oy: 8 * TILE - 22 });
+  place('chair', Sprites.props.chair, 9, 7, 1, 1, { oy: 8 * TILE - 20 });
+  place('chair', Sprites.props.chair, 12, 7, 1, 1, { oy: 8 * TILE - 20 });
+  place('barrel', Sprites.props.barrel, 1, 9, 1, 1, {});
+  place('crate', Sprites.props.crate, 14, 9, 1, 1, {});
+  place('pot', Sprites.props.pot, 14, 3, 1, 1, { solid: false });
+  place('lamp', Sprites.props.lamp, 1, 4, 1, 1, { solid: false, oy: 5 * TILE - 26 });
+
+  const npcs = [];
+  NPC_DEFS.filter(function (d) { return d.map === 'tavern'; }).forEach(function (d) {
+    npcs.push({
+      def: d, x: d.home.x * TILE, y: d.home.y * TILE, dir: 'down',
+      frame: 0, anim: 0, tx: d.home.x, ty: d.home.y, state: 'idle',
+      wait: 2, talked: false, moving: false, prevX: d.home.x, prevY: d.home.y
+    });
+  });
+  m.npcs = npcs;
+
+  m.lights.push({ x: 48, y: 26, r: 62, c: '#ffca80', on: true });
+  m.lights.push({ x: 13 * TILE + 8, y: 2 * TILE, r: 44, c: '#ffd9a0', on: true });
+  m.lights.push({ x: 6 * TILE, y: 7 * TILE, r: 54, c: '#ffe0b0', on: true });
+  m.lights.push({ x: 11 * TILE, y: 8 * TILE, r: 48, c: '#ffe0b0', on: true });
+  m.lights.push({ x: 1 * TILE + 8, y: 5 * TILE - 14, r: 56, c: '#ffd9a0', on: true });
+  return m;
+}
+
+function genHall() {
+  const m = mkMap(16, 12, T.STONE);
+  m.name = 'Sunvale Town Hall';
+  for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
+  for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
+  for (let y = 6; y <= 7; y++) for (let x = 6; x <= 9; x++) m.tiles[y * 16 + x] = T.RUG;
+
+  function place(type, sprite, x, y, w, h, extra) {
+    const p = baseSpriteProp(m, type, sprite, x, y, w || 1, h || 1, extra);
+    p.dirty = true;
+    return p;
+  }
+
+  addProp(m, {
+    type: 'door', tx: 7, ty: 11, w: 1, h: 1, solid: true, interact: 'exit',
+    target: 'farm', spawn: { x: 34 * TILE + 8, y: 13 * TILE }, sprite: null
+  });
+
+  place('board', Sprites.props.board, 2, 8, 2, 1, { interact: 'board', oy: 9 * TILE - 30 });
+  place('shelf', Sprites.props.shelf, 1, 1, 1, 1, { oy: 2 * TILE - 22, w: 3, h: 1 });
+  m.props[m.props.length - 1].w = 3;
+  for (let x = 9; x <= 13; x++) {
+    place('counter', Sprites.props.counter, x, 7, 1, 1, { oy: 8 * TILE - 22 });
+  }
+  place('register', Sprites.props.register, 11, 6, 1, 1, { oy: 7 * TILE - 14 });
+  place('table', Sprites.props.table, 6, 9, 2, 1, { oy: 10 * TILE - 22 });
+  place('chair', Sprites.props.chair, 5, 9, 1, 1, { oy: 10 * TILE - 20 });
+  place('chair', Sprites.props.chair, 8, 9, 1, 1, { oy: 10 * TILE - 20 });
+  place('barrel', Sprites.props.barrel, 14, 2, 1, 1, {});
+  place('pot', Sprites.props.pot, 14, 9, 1, 1, { solid: false });
+  place('pot', Sprites.props.pot, 1, 10, 1, 1, { solid: false });
+  place('lamp', Sprites.props.lamp, 15, 4, 1, 1, { solid: false, oy: 5 * TILE - 26 });
+
+  const npcs = [];
+  NPC_DEFS.filter(function (d) { return d.map === 'hall'; }).forEach(function (d) {
+    npcs.push({
+      def: d, x: d.home.x * TILE, y: d.home.y * TILE, dir: 'down',
+      frame: 0, anim: 0, tx: d.home.x, ty: d.home.y, state: 'idle',
+      wait: 2, talked: false, moving: false, prevX: d.home.x, prevY: d.home.y,
+      range: d.range
+    });
+  });
+  m.npcs = npcs;
+
+  m.lights.push({ x: 4 * TILE, y: 3 * TILE, r: 70, c: '#fff0c9', on: true });
+  m.lights.push({ x: 11 * TILE, y: 3 * TILE, r: 70, c: '#fff0c9', on: true });
+  m.lights.push({ x: 3 * TILE + 8, y: 8 * TILE, r: 54, c: '#ffe0b0', on: true });
   return m;
 }
 

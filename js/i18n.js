@@ -1,6 +1,21 @@
+/* I18N — localisation core (30 languages, auto localisation).
+   Load order: data.js -> i18n.js -> lang_*.js
+   (each calls I18N_ADD(code, dict)) -> applyDataTranslations() rewrites the
+   CROPS/ITEMS/NPC_DEFS/MAIL_* strings in place. Game/UI then call L().
+
+   NOTE: the translate helper is named L(), NOT T(), because data.js already
+   declares the tile enum `const T`. Same global scope, so T() would throw.
+
+   Also here: PixelFont unicode fallback so CJK/Arabic/Cyrillic glyphs render
+   instead of falling back to '?'.
+
+   State: current language is persisted under LANG_FILE in localStorage. */
+
 // Sunvale i18n core — 30 languages, auto localisation.
 // Load order: data.js -> i18n.js -> lang_*.js -> game/ui/world patches use T().
 // PixelFont unicode fallback is installed here so CJK/Arabic/etc render.
+
+// ---- language registry -------------------------------------------
 
 const SUPPORTED_LANGS = [
   { code: 'en', name: 'English' },
@@ -128,10 +143,11 @@ I18N_ADD('en', {
   'help.4': 'RUN         SHIFT',
   'help.5': 'HOTBAR      1 - 0 KEYS',
   'help.6': 'INVENTORY   I OR TAB',
-  'help.7': 'MAIL        MAILBOX / ENVELOPE',
-  'help.8': 'MUTE MUSIC  M',
-  'help.9': 'PAUSE       ESC',
-  'help.10': 'CLOSE       ESC',
+  'help.7': 'JOURNAL     J',
+  'help.8': 'MAIL        MAILBOX / ENVELOPE',
+  'help.9': 'MUTE MUSIC  M',
+  'help.10': 'PAUSE       ESC',
+  'help.11': 'CLOSE       ESC',
   'tip.0': 'USE THE HOE ON GRASS IN YOUR FIELD,',
   'tip.1': 'PLANT SEEDS, THEN WATER EVERY DAY.',
   'tip.2': 'SLEEP IN YOUR BED TO ADVANCE THE DAY.',
@@ -287,11 +303,60 @@ I18N_ADD('en', {
   'map.house': 'Your House',
   'map.shop': 'General Store',
   'gift.line': 'What a lovely gift! Thank you, farmer.',
+  'journal': 'JOURNAL',
+  'objective.talk': 'TALK TO {x}',
+  'objective.collect': 'HOLD {x} {y}',
+  'objective.deliver': 'DELIVER {x} {y} TO {z}',
+  'objective.cook': 'COOK {x} DISHES AT HOME',
+  'objective.sold': 'SELL {x}G WORTH OF GOODS',
+  'story.arrival.title': 'A NEW BEGINNING',
+  'story.arrival.desc': 'MEET MAYOR PEONY IN THE TOWN HALL',
+  'story.harvest.title': 'THE FIRST HARVEST',
+  'story.harvest.desc': 'BRING 5 TURNIPS TO YOUR CHEST OR POCKETS',
+  'story.timber.title': 'TIMBER FOR THE BRIDGE',
+  'story.timber.desc': 'COLLECT 20 WOOD FOR BRAM',
+  'story.gems.title': 'A SPARK IN THE STONE',
+  'story.gems.desc': 'DELIVER 3 AMETHYSTS TO SABLE BY THE POND',
+  'story.feast.title': 'A TABLE FOR SUNVALE',
+  'story.feast.desc': 'COOK 3 DISHES ON YOUR STOVE AT HOME',
+  'story.market.title': 'A FAIR EXCHANGE',
+  'story.market.desc': 'SELL GOODS WORTH 3000G AT THE STORE',
+  'story.festival.title': 'THE SUNVALE FESTIVAL',
+  'story.festival.desc': 'GROW 1 PUMPKIN AND 5 CORN FOR THE FESTIVAL',
+  'npc.pip': 'Pip',
+  'npc.wren': 'Wren',
+  'npc.sable': 'Sable',
+  'npc.peony': 'Mayor Peony',
+  'npc.odin': 'Odin',
+  'npc.pip.0': 'I alphabetise the seed shelf every single morning!',
+  'npc.pip.1': 'Ask Juniper about the upgrades tab. Go on, ask!',
+  'npc.pip.2': 'I say she counts too much. She says I talk too much.',
+  'npc.pip.3': 'The big backpack fits forty more turnips. Probably.',
+  'npc.wren.0': 'The woods are singing today. Can you hear it?',
+  'npc.wren.1': 'Wild berries grow on the bushes at the forest edge.',
+  'npc.wren.2': 'I track deer prints up north. You should come along.',
+  'npc.wren.3': 'A farmer and a ranger make fine neighbours.',
+  'npc.sable.0': 'The pond keeps secrets. So do I.',
+  'npc.sable.1': 'Amethysts only grow where the water once ran.',
+  'npc.sable.2': 'I fish at dusk. The light goes soft, then gold.',
+  'npc.sable.3': 'You have the look of someone building something.',
+  'npc.peony.0': 'Sunvale runs on kindness and a good harvest.',
+  'npc.peony.1': 'The board by the door lists what the valley needs.',
+  'npc.peony.2': 'Every farm here started with one turnip and a dream.',
+  'npc.peony.3': 'The festival is coming. We shall need your finest crops.',
+  'npc.odin.0': 'Sit, sit! The stew is on and the fire is lit.',
+  'npc.odin.1': 'The stove in your house knows my recipes. Try them.',
+  'npc.odin.2': 'Every good farm ends up on a plate in here.',
+  'npc.odin.3': 'The rafters hold a hundred years of laughter.',
+  'map.hall': 'Town Hall',
+  'map.tavern': 'Tavern',
   'tile.0': 'grass', 'tile.1': 'grass', 'tile.2': 'flowers', 'tile.3': 'path',
   'tile.4': 'water', 'tile.5': 'soil', 'tile.6': 'wet soil', 'tile.7': 'floor',
   'tile.8': 'wall', 'tile.9': 'rug', 'tile.10': 'stone', 'tile.11': 'deck',
   'tile.12': 'bridge', 'tile.13': 'sand', 'tile.14': 'fence', 'tile.15': 'hardwood'
 });
+
+// ---- lookup + interpolation ---------------------------------------
 
 const I18n = {
   lang: 'en',
@@ -346,41 +411,51 @@ const I18n = {
   }
 };
 
-function T(key, vars) { return I18n.t(key, vars); }
+function L(key, vars) { return I18n.t(key, vars); }
+
+// ---- rewrite static content tables in place ----------------------
 
 function applyDataTranslations() {
   try {
-    for (const id in CROPS) { const k = T('crop.' + id, null); if (k && k !== 'crop.' + id) CROPS[id].name = k; }
+    for (const id in CROPS) { const k = I18n.t('crop.' + id, null); if (k && k !== 'crop.' + id) CROPS[id].name = k; }
     for (const id in ITEMS) {
-      const n = T('item.' + id + '.name', null), d = T('item.' + id + '.desc', null);
+      const n = I18n.t('item.' + id + '.name', null), d = I18n.t('item.' + id + '.desc', null);
       if (n && n.indexOf('item.') !== 0) ITEMS[id].n = n;
       if (d && d.indexOf('item.') !== 0) ITEMS[id].d = d;
     }
     if (typeof RECIPES !== 'undefined') {
       const keys = ['veg_stew', 'omelette', 'berry_pie', 'pumpkin_soup'];
-      RECIPES.forEach(function (r, i) { const v = T('recipe.' + keys[i], null); if (v && v.indexOf('recipe.') !== 0) r.d = v; });
+      RECIPES.forEach(function (r, i) { const v = I18n.t('recipe.' + keys[i], null); if (v && v.indexOf('recipe.') !== 0) r.d = v; });
     }
     if (typeof UPGRADES !== 'undefined') {
       const ids = ['bag', 'chest', 'tools'];
       UPGRADES.forEach(function (u, i) {
-        const n = T('upgrade.' + ids[i], null), d = T('upgrade.' + ids[i] + '.d', null);
+        const n = I18n.t('upgrade.' + ids[i], null), d = I18n.t('upgrade.' + ids[i] + '.d', null);
         if (n && n.indexOf('upgrade.') !== 0) u.n = n;
         if (d && d.indexOf('upgrade.') !== 0) u.d = d;
       });
     }
     if (typeof NPC_DEFS !== 'undefined') {
       NPC_DEFS.forEach(function (n) {
-        const nm = T('npc.' + n.id, null);
+        const nm = I18n.t('npc.' + n.id, null);
         if (nm && nm.indexOf('npc.') !== 0) n.name = nm;
         for (let i = 0; i < n.lines.length; i++) {
-          const v = T('npc.' + n.id + '.' + i, null);
+          const v = I18n.t('npc.' + n.id + '.' + i, null);
           if (v && v.indexOf('npc.') !== 0) n.lines[i] = v;
         }
       });
     }
+    if (typeof STORY !== 'undefined') {
+      STORY.forEach(function (ch) {
+        const ti = I18n.t('story.' + ch.id + '.title', null);
+        const de = I18n.t('story.' + ch.id + '.desc', null);
+        if (ti && ti.indexOf('story.') !== 0) ch.title = ti;
+        if (de && de.indexOf('story.') !== 0) ch.desc = de;
+      });
+    }
     if (typeof MAIL_TIPS !== 'undefined') {
       MAIL_TIPS.forEach(function (m, i) {
-        const f = T('mail.tip' + i + '.from', null), s = T('mail.tip' + i + '.sub', null), b = T('mail.tip' + i + '.body', null);
+        const f = I18n.t('mail.tip' + i + '.from', null), s = I18n.t('mail.tip' + i + '.sub', null), b = I18n.t('mail.tip' + i + '.body', null);
         if (f && f.indexOf('mail.') !== 0) m.from = f;
         if (s && s.indexOf('mail.') !== 0) m.subject = s;
         if (b && b.indexOf('mail.') !== 0) m.body = String(b).split('|');
@@ -388,7 +463,7 @@ function applyDataTranslations() {
     }
     if (typeof MAIL_REQUESTS !== 'undefined') {
       MAIL_REQUESTS.forEach(function (m, i) {
-        const f = T('mail.req' + i + '.from', null), s = T('mail.req' + i + '.sub', null), b = T('mail.req' + i + '.body', null);
+        const f = I18n.t('mail.req' + i + '.from', null), s = I18n.t('mail.req' + i + '.sub', null), b = I18n.t('mail.req' + i + '.body', null);
         if (f && f.indexOf('mail.') !== 0) m.from = f;
         if (s && s.indexOf('mail.') !== 0) m.subject = s;
         if (b && b.indexOf('mail.') !== 0) m.body = String(b).split('|');
@@ -396,26 +471,26 @@ function applyDataTranslations() {
     }
     if (typeof FRIEND_MILESTONES !== 'undefined') {
       FRIEND_MILESTONES.forEach(function (m, i) {
-        const s = T('mail.ms' + i + '.sub', null), b = T('mail.ms' + i + '.body', null);
+        const s = I18n.t('mail.ms' + i + '.sub', null), b = I18n.t('mail.ms' + i + '.body', null);
         if (s && s.indexOf('mail.') !== 0) m.subject = s;
         if (b && b.indexOf('mail.') !== 0) m.body = String(b).split('|');
       });
     }
     if (typeof GIFT_THANKS !== 'undefined') {
       for (let i = 0; i < GIFT_THANKS.length; i++) {
-        const v = T('gift.' + i, null);
+        const v = I18n.t('gift.' + i, null);
         if (v && v.indexOf('gift.') !== 0) GIFT_THANKS[i] = v;
       }
     }
     if (typeof HELP_LINES !== 'undefined') {
       for (let i = 0; i < HELP_LINES.length; i++) {
-        const v = T('help.' + i, null);
+        const v = I18n.t('help.' + i, null);
         if (v && v.indexOf('help.') !== 0) HELP_LINES[i] = v;
       }
     }
     if (typeof TILE_NAMES !== 'undefined') {
       for (let i = 0; i < TILE_NAMES.length; i++) {
-        const v = T('tile.' + i, null);
+        const v = I18n.t('tile.' + i, null);
         if (v && v.indexOf('tile.') !== 0) TILE_NAMES[i] = v;
       }
     }

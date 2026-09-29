@@ -1,3 +1,22 @@
+/* SPRITES — all art is generated at runtime onto offscreen canvases.
+   Nothing here loads image files; shapes are drawn with fillRect primitives
+   (px) and ellipse helpers, so editing a colour or a coordinate is enough.
+
+   Layout
+     FONT / PixelFont   5x7 bitmap font: glyph cache, measure(), draw(), shadow()
+     mk/px/rngf/...     low-level helpers (mk = create canvas, rngf = seeded RNG)
+     Sprites            the atlas the renderer reads — fill it in via build*
+     buildTiles/...     one builder per category: tiles, characters, crops,
+                        items, props, buildings, UI
+     buildAllSprites()  called ONCE from boot() in main.js; call it again if
+                        you change palettes at runtime
+
+   Contracts
+     * Sprites.* shapes are plain canvases — drawImage() them, never mutate.
+     * The seeded rngf(seed) calls are what make generated art deterministic
+       across reloads; changing a seed reshuffles that whole sprite.
+     * PixelFont upper-cases everything: lowercase never reaches the glyphs. */
+
 const FONT = {
   'A': '01110/10001/10001/11111/10001/10001/10001',
   'B': '11110/10001/10001/11110/10001/10001/11110',
@@ -68,6 +87,8 @@ const FONT = {
   '~': '00000/00000/01000/10101/00010/00000/00000'
 };
 
+// ---- bitmap font (5x7, upper-case only) ---------------------------
+
 const PixelFont = {
   cache: {},
   glyph: function (ch, color) {
@@ -107,6 +128,8 @@ const PixelFont = {
   }
 };
 
+// ---- primitive drawing helpers ------------------------------------
+
 function mk(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
@@ -145,10 +168,14 @@ function blob(ctx, cx, cy, rx, ry, fill, outline) {
   fillEllipse(ctx, cx, cy, rx, ry, fill);
 }
 
+// ---- the atlas + its builders -------------------------------------
+
 const Sprites = {
   tiles: [], water: [], fence: {}, player: {}, chicken: [], crops: {},
   items: {}, props: {}, builds: {}, ui: {}, shadow: null
 };
+
+// ---- terrain tiles (one canvas per T.* id) ------------------------
 
 function buildTiles() {
   function grass(v) {
@@ -335,6 +362,8 @@ function buildTiles() {
   Sprites.fence = { '00': nf[0], '10': nf[1], '01': nf[2], '11': nf[3] };
 }
 
+// ---- player / villager palettes ----------------------------------
+
 function buildCharacters() {
   for (const name in ART.palettes) {
     const pal = ART.palettes[name];
@@ -382,6 +411,8 @@ function buildCharacters() {
   const sg = Sprites.shadow.getContext('2d');
   fillEllipse(sg, 8, 4, 7, 3, 'rgba(20,16,12,0.28)');
 }
+
+// ---- crop growth stages ------------------------------------------
 
 function buildCrops() {
   for (const id in CROPS) {
@@ -464,6 +495,8 @@ function drawCrop(g, cr, s) {
     px(g, cx - 1, 7, 2, 2, leaf2);
   }
 }
+
+// ---- inventory item icons ----------------------------------------
 
 function buildItems() {
   const I = Sprites.items;
@@ -633,6 +666,8 @@ function makeSign(text, w) {
   PixelFont.draw(g, text, Math.floor(w / 2), 4, '#4a3421', 1, 'center');
   return c;
 }
+
+// ---- world props: trees, rocks, bushes, mailbox, signs -----------
 
 function buildProps() {
   const P = Sprites.props;
@@ -1068,6 +1103,8 @@ function buildProps() {
   P.plant = P.pot;
 }
 
+// ---- buildings: house, shop, coop --------------------------------
+
 function buildBuildings() {
   const B = Sprites.builds;
 
@@ -1188,7 +1225,119 @@ function buildBuildings() {
     PixelFont.draw(g, 'CLUCK', 25, 44, '#4a3421', 1, 'center');
     px(g, 8, 72, 88, 4, '#8a6a4a');
   })();
+
+  B.tavern = mk(168, 132);
+  (function () {
+    const g = B.tavern.getContext('2d'), r = rngf(7712);
+    px(g, 4, 84, 160, 44, '#a8845c');
+    for (let x = 8; x < 160; x += 10) px(g, x, 84, 1, 44, '#96734c');
+    px(g, 4, 84, 160, 2, '#c9a67e');
+    px(g, 4, 124, 160, 4, '#8a6a4a');
+    px(g, 4, 128, 160, 4, '#6f5338');
+    for (let i = 0; i < 90; i++) {
+      g.fillStyle = r() < 0.5 ? '#9c7a52' : '#b8946a';
+      g.fillRect(6 + ((r() * 156) | 0), 86 + ((r() * 38) | 0), 1, 1);
+    }
+    px(g, 0, 34, 168, 52, '#6b4a7a');
+    for (let y = 34; y < 86; y += 8) px(g, 0, y, 168, 2, '#573a66');
+    for (let y = 38; y < 86; y += 8) {
+      for (let x = ((y / 8) % 2) * 6; x < 168; x += 12) px(g, x, y, 1, 6, '#573a66');
+    }
+    px(g, 0, 34, 168, 4, '#8a6a9c');
+    px(g, 0, 30, 168, 5, '#9e7fb0');
+    px(g, 0, 28, 168, 3, '#5f4370');
+    px(g, 4, 82, 160, 4, '#4a3421');
+
+    px(g, 28, 56, 112, 26, '#5a3f24');
+    px(g, 30, 58, 108, 22, '#e8d9a8');
+    px(g, 30, 58, 108, 1, '#f7efd0');
+    PixelFont.draw(g, 'THE HEARTH', 84, 66, '#4a3421', 1, 'center');
+
+    function windowAt(x, y, w, h) {
+      px(g, x - 2, y - 2, w + 4, h + 4, '#f0ead8');
+      px(g, x, y, w, h, '#f0c97a');
+      px(g, x, y, w, 2, '#ffe1a8');
+      px(g, x, y + h - 2, w, 2, '#c99a3a');
+      px(g, x + Math.floor(w / 2) - 1, y, 2, h, '#f0ead8');
+      px(g, x, y + Math.floor(h / 2) - 1, w, 2, '#f0ead8');
+      px(g, x - 2, y + h + 2, w + 4, 2, '#c9c0ae');
+    }
+    windowAt(22, 92, 26, 22);
+    windowAt(118, 92, 26, 22);
+
+    px(g, 74, 96, 22, 32, '#5a3f24');
+    px(g, 76, 98, 18, 30, '#3a2a1a');
+    px(g, 76, 98, 18, 4, '#5f462c');
+    px(g, 74, 96, 22, 2, '#a97c4f');
+    px(g, 90, 114, 3, 3, '#e8c452');
+    px(g, 70, 126, 30, 4, '#c99a66');
+    px(g, 70, 126, 30, 1, '#e0c68f');
+    px(g, 6, 128, 156, 4, '#6b5340');
+    px(g, 64, 84, 7, 9, '#3a3a44');
+    px(g, 65, 86, 5, 5, '#f7d76e');
+    px(g, 96, 84, 7, 9, '#3a3a44');
+    px(g, 97, 86, 5, 5, '#f7d76e');
+  })();
+
+  B.hall = mk(168, 132);
+  (function () {
+    const g = B.hall.getContext('2d'), r = rngf(5533);
+    px(g, 4, 84, 160, 44, '#d3c6ab');
+    for (let x = 10; x < 160; x += 18) px(g, x, 84, 1, 44, '#c0b195');
+    px(g, 4, 84, 160, 2, '#e8dcc4');
+    px(g, 4, 124, 160, 4, '#a89a80');
+    px(g, 4, 128, 160, 4, '#8a7f68');
+    for (let i = 0; i < 90; i++) {
+      g.fillStyle = r() < 0.5 ? '#cbbd9f' : '#e0d4ba';
+      g.fillRect(6 + ((r() * 156) | 0), 86 + ((r() * 38) | 0), 1, 1);
+    }
+    px(g, 0, 34, 168, 52, '#3f7a5a');
+    for (let y = 34; y < 86; y += 8) px(g, 0, y, 168, 2, '#2f5f47');
+    for (let y = 38; y < 86; y += 8) {
+      for (let x = ((y / 8) % 2) * 6; x < 168; x += 12) px(g, x, y, 1, 6, '#2f5f47');
+    }
+    px(g, 0, 34, 168, 4, '#4f9a76');
+    px(g, 0, 30, 168, 5, '#67b595');
+    px(g, 0, 28, 168, 3, '#37705c');
+    px(g, 4, 82, 160, 4, '#2b4f49');
+
+    px(g, 34, 56, 100, 24, '#5a3f24');
+    px(g, 36, 58, 96, 20, '#e8d9a8');
+    px(g, 36, 58, 96, 1, '#f7efd0');
+    PixelFont.draw(g, 'TOWN HALL', 84, 66, '#4a3421', 1, 'center');
+
+    px(g, 14, 88, 9, 38, '#f0ead8');
+    px(g, 14, 88, 9, 2, '#ffffff');
+    px(g, 17, 90, 2, 34, '#d8d0bc');
+    px(g, 145, 88, 9, 38, '#f0ead8');
+    px(g, 145, 88, 9, 2, '#ffffff');
+    px(g, 148, 90, 2, 34, '#d8d0bc');
+
+    function windowAt(x, y, w, h) {
+      px(g, x - 2, y - 2, w + 4, h + 4, '#f0ead8');
+      px(g, x, y, w, h, '#8fd0c0');
+      px(g, x, y, w, 2, '#b8e8dc');
+      px(g, x, y + h - 2, w, 2, '#5a9a8c');
+      px(g, x + Math.floor(w / 2) - 1, y, 2, h, '#f0ead8');
+      px(g, x, y + Math.floor(h / 2) - 1, w, 2, '#f0ead8');
+      px(g, x - 2, y + h + 2, w + 4, 2, '#c9c0ae');
+    }
+    windowAt(34, 94, 24, 20);
+    windowAt(110, 94, 24, 20);
+
+    px(g, 72, 94, 26, 34, '#5a3f24');
+    px(g, 74, 96, 22, 32, '#2b2118');
+    px(g, 84, 96, 2, 32, '#5a3f24');
+    px(g, 74, 96, 22, 4, '#4a3421');
+    px(g, 78, 112, 3, 3, '#e8c452');
+    px(g, 90, 112, 3, 3, '#e8c452');
+    px(g, 68, 126, 34, 4, '#c99a66');
+    px(g, 68, 126, 34, 1, '#e0c68f');
+    px(g, 6, 128, 156, 4, '#6b5340');
+  })();
 }
+
+// ---- HUD chrome (bars, hotbar slots, panels) ----------------------
 
 function buildUI() {
   const U = Sprites.ui;
@@ -1275,6 +1424,8 @@ function buildUI() {
     px(g, 7, 6, 2, 1, '#f7e07a');
   })();
 }
+
+// ---- entry point: called once from boot() -------------------------
 
 function buildAllSprites() {
   buildTiles();
