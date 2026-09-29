@@ -1,0 +1,155 @@
+const Story = {
+  i: 0, introShown: {}, done: false, busy: false,
+  stats: { harvested: 0, cooked: 0, sold: 0 },
+
+  reset: function () {
+    this.i = 0;
+    this.introShown = {};
+    this.done = false;
+    this.busy = false;
+    this.stats = { harvested: 0, cooked: 0, sold: 0 };
+  },
+
+  chapter: function () {
+    if (this.done) return null;
+    return STORY[this.i] || null;
+  },
+
+  def: function (id) {
+    for (const d of NPC_DEFS) if (d.id === id) return d;
+    return null;
+  },
+
+  objectiveLabel: function (o) {
+    if (o.type === 'talk') {
+      const d = this.def(o.npc);
+      return 'TALK TO ' + (d ? d.name.toUpperCase() : o.npc.toUpperCase());
+    }
+    if (o.type === 'collect') return 'HOLD ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase();
+    if (o.type === 'deliver') {
+      const d = this.def(o.npc);
+      return 'DELIVER ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase() + ' TO ' + (d ? d.name.toUpperCase() : '');
+    }
+    if (o.type === 'cook') return 'COOK ' + o.n + ' DISHES AT HOME';
+    if (o.type === 'sold') return 'SELL ' + o.n + 'G WORTH OF GOODS';
+    return '';
+  },
+
+  objectiveProgress: function (o) {
+    if (o.type === 'collect') return Math.min(o.n, Game.countItem(o.id)) + '/' + o.n;
+    if (o.type === 'cook') return Math.min(o.n, this.stats.cooked) + '/' + o.n;
+    if (o.type === 'sold') return Math.min(o.n, this.stats.sold) + '/' + o.n;
+    return null;
+  },
+
+  lines: function () {
+    const ch = this.chapter();
+    if (!ch) return [];
+    const out = [];
+    for (const o of ch.obj) {
+      const p = this.objectiveProgress(o);
+      out.push({ text: this.objectiveLabel(o), prog: p, met: this.met(o) });
+    }
+    return out;
+  },
+
+  met: function (o) {
+    if (o.type === 'collect') return Game.countItem(o.id) >= o.n;
+    if (o.type === 'cook') return this.stats.cooked >= o.n;
+    if (o.type === 'sold') return this.stats.sold >= o.n;
+    return false;
+  },
+
+  ready: function () {
+    const ch = this.chapter();
+    if (!ch) return false;
+    for (const o of ch.obj) if (!this.met(o)) return false;
+    return true;
+  },
+
+  tick: function () {
+    if (this.done || this.busy) return;
+    if (Game.state !== 'play') return;
+    if (this.ready()) this.complete();
+  },
+
+  onHarvest: function () { this.stats.harvested += 1; },
+  onCook: function () { this.stats.cooked += 1; },
+  onSell: function (gold) { this.stats.sold += gold || 0; },
+
+  noteTalk: function (npcId) {
+    const ch = this.chapter();
+    if (!ch || this.done) return false;
+    let touched = false;
+    for (const o of ch.obj) {
+      if (o.type === 'talk' && o.npc === npcId) touched = true;
+      if (o.type === 'deliver' && o.npc === npcId) {
+        if (Game.countItem(o.id) >= o.n) {
+          Game.removeItem(o.id, o.n);
+          FX.toast('DELIVERED ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase(), '#a8e8a0');
+          touched = true;
+        } else {
+          FX.toast('THEY WANT ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase(), '#e0a0a0');
+        }
+      }
+    }
+    if (touched || this.ready()) {
+      if (this.ready()) { this.complete(); return true; }
+    }
+    return false;
+  },
+
+  introFor: function (npcId) {
+    const ch = this.chapter();
+    if (!ch || ch.giver !== npcId || this.introShown[ch.id]) return null;
+    this.introShown[ch.id] = true;
+    return ['CHAPTER: ' + ch.title, ch.desc + '.'];
+  },
+
+  complete: function () {
+    const ch = this.chapter();
+    if (!ch || this.busy) return;
+    this.busy = true;
+    if (ch.reward) {
+      if (ch.reward.money) {
+        Game.money += ch.reward.money;
+        FX.toast('+' + ch.reward.money + 'G REWARD', '#f7e07a');
+      }
+      if (ch.reward.items) {
+        for (const id in ch.reward.items) {
+          const left = Game.addItem(id, ch.reward.items[id]);
+          if (left > 0) FX.toast('REWARD LOST - BAG FULL', '#e0453f');
+          else FX.toast('+' + ch.reward.items[id] + ' ' + ITEMS[id].n.toUpperCase(), '#a8e8a0');
+        }
+      }
+    }
+    FX.toast('CHAPTER COMPLETE: ' + ch.title, '#7fd06f');
+    AudioSys.play('coin');
+    this.i += 1;
+    if (this.i >= STORY.length) {
+      this.done = true;
+      FX.toast('STORY COMPLETE - SUNVALE LIVES!', '#f7e07a');
+    } else {
+      FX.toast('NEW CHAPTER: ' + STORY[this.i].title, '#f7e07a');
+    }
+    Game.save();
+    this.busy = false;
+    if (ch.outro && ch.outro.length) {
+      const g = this.def(ch.giver);
+      if (g) Game.say(g.name.toUpperCase(), g.palette, ch.outro.slice(), g.id);
+    }
+  },
+
+  serialize: function () {
+    return { i: this.i, done: this.done, intro: this.introShown, stats: this.stats };
+  },
+
+  applySave: function (d) {
+    if (!d) return;
+    this.i = d.i || 0;
+    this.done = !!d.done;
+    this.introShown = d.intro || {};
+    this.stats = d.stats || { harvested: 0, cooked: 0, sold: 0 };
+    if (this.i >= STORY.length) { this.i = STORY.length - 1; this.done = true; }
+  }
+};
