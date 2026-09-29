@@ -190,7 +190,7 @@ function genFarm(seed) {
   const s = seed >>> 0;
   const r = rngf(s);
   const m = mkMap(MAP_W, MAP_H, T.GRASS);
-  m.name = 'Sunvale Farm';
+  m.name = (typeof L === 'function') ? L('map.farm') : 'Sunvale Farm';
 
   function inMap(x, y) { return x >= 0 && y >= 0 && x < MAP_W && y < MAP_H; }
   function getT(x, y) { return inMap(x, y) ? m.tiles[y * MAP_W + x] : T.WATER; }
@@ -306,10 +306,10 @@ function genFarm(seed) {
     return true;
   }
 
-  const fieldGate = 14 + ((r() * 17) | 0);
+  const fieldX = 14 + ((r() * 17) | 0);
   const fieldGap = 30 + ((r() * 14) | 0);
-  fenceRect(7, 21, 34, 47, [
-    { edge: 'top', x0: fieldGate, x1: fieldGate + 1 },
+  fenceRect(7, 21, 34, 48, [
+    { edge: 'top', x0: fieldX, x1: fieldX + 1 },
     { edge: 'right', y0: fieldGap, y1: fieldGap + 1 }
   ]);
 
@@ -390,7 +390,6 @@ function genFarm(seed) {
     }
   }
 
-  const fieldX = 14 + ((r() * 17) | 0);
   for (let y = 16; y <= 21; y++) {
     if (!path(fieldX, y)) break;
     path(fieldX + 1, y);
@@ -498,9 +497,9 @@ function genFarm(seed) {
   placeFree('mailbox', Sprites.props.mailbox, [[12, 12], [13, 12], [14, 12], [12, 13], [14, 13], [15, 12]],
     { interact: 'mailbox', text: null });
   placeFree('sign', Sprites.props.sign, [[15, 13], [16, 13], [17, 13], [14, 13], [13, 13]],
-    { interact: 'sign', text: 'WELCOME TO SUNVALE FARM' });
+    { interact: 'sign', text: (typeof L === 'function') ? L('sign.farm') : 'WELCOME TO SUNVALE FARM' });
   placeFree('sign', Sprites.props.sign_small, [[44, 13], [43, 13], [45, 13], [42, 13], [41, 13]],
-    { interact: 'sign', text: 'GENERAL STORE - SEEDS AND SUPPLIES' });
+    { interact: 'sign', text: (typeof L === 'function') ? L('sign.shop') : 'GENERAL STORE - SEEDS AND SUPPLIES' });
 
   const qboard = baseSpriteProp(m, 'board', Sprites.props.board, 17, 13, 2, 1, {
     interact: 'board', text: null
@@ -602,7 +601,7 @@ function genFarm(seed) {
 
 function genHouse() {
   const m = mkMap(16, 12, T.FLOOR);
-  m.name = 'Your House';
+  m.name = (typeof L === 'function') ? L('map.house') : 'Your House';
   for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
   for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
   for (let y = 6; y <= 7; y++) for (let x = 6; x <= 9; x++) m.tiles[y * 16 + x] = T.RUG;
@@ -637,7 +636,7 @@ function genHouse() {
 
 function genShop() {
   const m = mkMap(16, 12, T.STONE);
-  m.name = 'General Store';
+  m.name = (typeof L === 'function') ? L('map.shop') : 'General Store';
   for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
   for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
 
@@ -688,7 +687,7 @@ function genShop() {
 
 function genTavern() {
   const m = mkMap(16, 12, T.FLOOR);
-  m.name = 'The Hearth Tavern';
+  m.name = (typeof L === 'function') ? L('map.tavern', null) !== 'map.tavern' ? L('map.tavern') : 'The Hearth Tavern' : 'The Hearth Tavern';
   for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
   for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
   for (let y = 6; y <= 7; y++) for (let x = 3; x <= 8; x++) m.tiles[y * 16 + x] = T.RUG;
@@ -742,7 +741,7 @@ function genTavern() {
 
 function genHall() {
   const m = mkMap(16, 12, T.STONE);
-  m.name = 'Sunvale Town Hall';
+  m.name = (typeof L === 'function') ? L('map.hall', null) !== 'map.hall' ? L('map.hall') : 'Sunvale Town Hall' : 'Sunvale Town Hall';
   for (let x = 0; x < 16; x++) { m.tiles[x] = T.WALL; m.tiles[11 * 16 + x] = T.WALL; }
   for (let y = 0; y < 12; y++) { m.tiles[y * 16] = T.WALL; m.tiles[y * 16 + 15] = T.WALL; }
   for (let y = 6; y <= 7; y++) for (let x = 6; x <= 9; x++) m.tiles[y * 16 + x] = T.RUG;

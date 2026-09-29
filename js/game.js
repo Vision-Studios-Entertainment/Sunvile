@@ -38,12 +38,15 @@ const Game = {
   fade: 0, fadeDir: 0, sleepT: 0, sleepReason: '',
   hasSave: false, clockAcc: 0, hint: 0, flash: 0,
   hoveredSlot: null, msg: null, msgT: 0,
+  titleSeed: 1337, seedText: '1337', seedTyped: false,
 
 // ==== lifecycle: boot, new game, save/load ==========================
 
   init: function () {
-    this.inv = new Array(30).fill(null);
-    this.chest = new Array(20).fill(null);
+    this.upg = { bag: 0, chest: 0, tools: 0 };
+    Story.reset();
+    this.inv = new Array(this.bagSize()).fill(null);
+    this.chest = new Array(this.chestSize()).fill(null);
     this.mail = []; this.mailSel = 0; this.mailSeq = 1;
     this.tipIdx = 0; this.reqIdx = 0; this.friendship = {};
     this.inv[0] = { id: 'hoe', n: 1 };
@@ -52,19 +55,52 @@ const Game = {
     this.inv[3] = { id: 'pick', n: 1 };
     this.hasSave = !!this.peekSave();
     this.state = 'title';
-    World.init(1337);
+    World.init(this.titleSeed);
   },
 
   peekSave: function () {
     try { return localStorage.getItem(SAVE_KEY); } catch (e) { return null; }
   },
 
-  newGame: function () {
+// ==== title seed entry (procedural farm layout) =====================
+
+  seedNum: function () {
+    const v = parseInt(this.seedText, 10);
+    return isFinite(v) && v > 0 ? Math.min(v, 999999999) : 1337;
+  },
+
+  applySeed: function () {
+    this.titleSeed = this.seedNum();
+    World.init(this.titleSeed);
+  },
+
+  typeSeed: function (ch) {
+    if (this.seedTyped) this.seedText += ch;
+    else { this.seedText = ch; this.seedTyped = true; }
+    if (this.seedText.length > 9) this.seedText = this.seedText.slice(0, 9);
+    this.applySeed();
+  },
+
+  backSeed: function () {
+    this.seedTyped = true;
+    this.seedText = this.seedText.slice(0, -1);
+    if (this.seedText) this.applySeed();
+  },
+
+  rollSeed: function () {
+    this.seedText = String(1 + ((Math.random() * 999999) | 0));
+    this.seedTyped = false;
+    this.applySeed();
+  },
+
+  newGame: function (seed) {
     this.day = 1; this.timeMin = DAY_START;
     this.weather = 'sunny'; this.nextWeather = this.rollWeather();
     this.money = 500; this.energy = MAX_ENERGY; this.selected = 4;
-    this.inv = new Array(30).fill(null);
-    this.chest = new Array(20).fill(null);
+    this.upg = { bag: 0, chest: 0, tools: 0 };
+    Story.reset();
+    this.inv = new Array(this.bagSize()).fill(null);
+    this.chest = new Array(this.chestSize()).fill(null);
     this.inv[0] = { id: 'hoe', n: 1 };
     this.inv[1] = { id: 'can', n: 1 };
     this.inv[2] = { id: 'axe', n: 1 };
@@ -73,15 +109,18 @@ const Game = {
     this.mail = []; this.mailSel = 0; this.mailSeq = 1;
     this.tipIdx = 0; this.reqIdx = 0; this.friendship = {};
     this.pushMail(this.welcomeMail());
-    World.init(1337);
+    const sd = seed === undefined ? this.seedNum() : (seed | 0);
+    this.titleSeed = sd; this.seedText = String(sd); this.seedTyped = false;
+    World.init(sd);
     World.current = 'farm';
     Player.x = 10 * TILE + 8; Player.y = 15 * TILE; Player.dir = 'down';
     FX.clear();
     this.state = 'play';
     AudioSys.init(); AudioSys.resume(); AudioSys.startMusic();
     AudioSys.setRain(false);
-    FX.toast('WELCOME TO SUNVALE FARM', '#f7e07a');
-    FX.toast('PRESS H FOR CONTROLS', '#f0e6d0');
+    FX.toast(L('msg.welcome_farm'), '#f7e07a');
+    FX.toast('SEED ' + sd + '   REROLL ON TITLE', '#9fe0c0');
+    FX.toast('PRESS ' + Settings.keyName(Settings.data.bindings.help) + ' FOR CONTROLS', '#f0e6d0');
     this.save();
   },
 
@@ -91,15 +130,18 @@ const Game = {
     let d;
     try { d = JSON.parse(raw); } catch (e) { return this.newGame(); }
     World.init(d.seed || 1337);
+    this.titleSeed = World.seed; this.seedText = String(World.seed); this.seedTyped = false;
     World.current = d.map || 'farm';
     World.applySave(d.world);
     this.day = d.day; this.timeMin = d.timeMin;
     this.weather = d.weather; this.nextWeather = d.nextWeather;
     this.money = d.money; this.energy = d.energy; this.selected = d.selected || 4;
-    this.inv = (d.inv || []).map(function (s) { return s ? { id: s[0], n: s[1] } : null; });
-    while (this.inv.length < 30) this.inv.push(null);
+    this.upg = d.upg || { bag: 0, chest: 0, tools: 0 };
+    Story.applySave(d.story);
+    this.inv = (d.inv || []).map(function (s) { return s ? { id: s[0], n: s[1], fav: !!s[2] } : null; });
+    while (this.inv.length < this.bagSize()) this.inv.push(null);
     this.chest = (d.chest || []).map(function (s) { return s ? { id: s[0], n: s[1] } : null; });
-    while (this.chest.length < 20) this.chest.push(null);
+    while (this.chest.length < this.chestSize()) this.chest.push(null);
     this.mail = d.mail || [];
     this.mailSel = 0;
     this.mailSeq = d.mailSeq || (this.mail.length + 1);
@@ -123,7 +165,7 @@ const Game = {
     this.state = 'play';
     AudioSys.init(); AudioSys.resume(); AudioSys.startMusic();
     AudioSys.setRain(this.weather === 'rain' || this.weather === 'storm');
-    FX.toast('WELCOME BACK TO SUNVALE', '#f7e07a');
+    FX.toast(L('msg.welcome_back'), '#f7e07a');
   },
 
   save: function () {
@@ -136,15 +178,16 @@ const Game = {
       money: this.money, energy: this.energy, selected: this.selected,
       mail: this.mail, mailSeq: this.mailSeq, friendship: this.friendship,
       tipi: this.tipIdx, reqi: this.reqIdx,
+      upg: this.upg, story: Story.serialize(),
       map: World.current, px: Player.x, py: Player.y, pdir: Player.dir,
-      inv: this.inv.map(function (s) { return s ? [s.id, s.n] : null; }),
+      inv: this.inv.map(function (s) { return s ? [s.id, s.n, s.fav ? 1 : 0] : null; }),
       chest: this.chest.map(function (s) { return s ? [s.id, s.n] : null; }),
       soil: soil, crops: farm.crops,
       chickens: farm.chickens.map(function (c) { return [c.x, c.y]; }),
       world: World.serialize()
     };
     try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); this.hasSave = true; }
-    catch (e) { FX.toast('SAVE FAILED', '#e0453f'); }
+    catch (e) { FX.toast(L('msg.save_failed'), '#e0453f'); }
   },
 
 // ==== clock: weather + time of day =================================
@@ -157,10 +200,17 @@ const Game = {
   },
 
   weatherName: function (w) {
+    if (typeof L === 'function') return L(w === 'sunny' ? 'sunny' : w === 'rain' ? 'rain' : 'storm');
     return w === 'sunny' ? 'SUNNY' : w === 'rain' ? 'RAIN' : 'STORM';
   },
 
-  dayName: function () { return ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'][(this.day - 1) % 7]; },
+  dayName: function () {
+    if (typeof L === 'function') {
+      const keys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+      return L(keys[(this.day - 1) % 7]);
+    }
+    return ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'][(this.day - 1) % 7];
+  },
 
   clockText: function () {
     let h = Math.floor(this.timeMin / 60), m = Math.floor(this.timeMin % 60);
@@ -212,8 +262,9 @@ const Game = {
   selItem: function () { return this.inv[this.selected]; },
 
   useEnergy: function (amt) {
+    if (this.upg && this.upg.tools) amt = Math.max(1, amt - 1);
     if (this.energy < amt) {
-      if (this.msg !== 'TOO TIRED...') { this.msg = 'TOO TIRED...'; this.msgT = 2; AudioSys.play('error'); }
+      if (this.msg !== L('msg.too_tired')) { this.msg = L('msg.too_tired'); this.msgT = 2; AudioSys.play('error'); }
       return false;
     }
     this.energy = Math.max(0, this.energy - amt);
@@ -277,7 +328,7 @@ const Game = {
     }
     if (!this.canTarget(t)) {
       AudioSys.play('error');
-      FX.float(Player.x, Player.y - 24, 'NOT HERE', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.not_here'), '#e0a0a0');
       return;
     }
     if (!this.useEnergy(ENERGY.till)) return;
@@ -301,7 +352,7 @@ const Game = {
     if (World.current !== 'farm') { AudioSys.play('error'); return; }
     if (cur !== T.SOIL && cur !== T.SOIL_WET && !hasCrop) {
       AudioSys.play('error');
-      FX.float(Player.x, Player.y - 24, 'DRY GROUND', '#a0c0e0');
+      FX.float(Player.x, Player.y - 24, L('msg.dry_ground'), '#a0c0e0');
       return;
     }
     if (cur === T.SOIL_WET && map.soil[key] && map.soil[key].w) return;
@@ -322,7 +373,7 @@ const Game = {
         AudioSys.play('chop');
         FX.burst(t.x * TILE + 8, t.y * TILE + 8, '#5fae44', 8, 40, 0.5);
         this.addItem('wood', 1);
-        FX.float(t.x * TILE + 8, t.y * TILE, '+1 WOOD', '#e0c68f');
+        FX.float(t.x * TILE + 8, t.y * TILE, '+1 ' + ITEMS.wood.n.toUpperCase(), '#e0c68f');
         return;
       }
       this.swing(null);
@@ -353,7 +404,7 @@ const Game = {
       prop.dirty = true;
       World.rebuildGrid(World.current);
       this.addItem('wood', wood);
-      FX.float(t.x * TILE + 8, t.y * TILE - 6, '+' + wood + ' WOOD', '#e0c68f');
+      FX.float(t.x * TILE + 8, t.y * TILE - 6, '+' + wood + ' ' + ITEMS.wood.n.toUpperCase(), '#e0c68f');
       AudioSys.play('chopTree');
       this.hinted('chop');
     }
@@ -378,10 +429,10 @@ const Game = {
       const ore = prop.kind === 'ore';
       const stone = 2 + ((Math.random() * 2) | 0);
       this.addItem('stone', stone);
-      FX.float(t.x * TILE + 8, t.y * TILE - 6, '+' + stone + ' STONE', '#d5dbe2');
+      FX.float(t.x * TILE + 8, t.y * TILE - 6, '+' + stone + ' ' + ITEMS.stone.n.toUpperCase(), '#d5dbe2');
       if (ore) {
         this.addItem('gem', 1);
-        FX.float(t.x * TILE + 8, t.y * TILE - 16, '+1 AMETHYST', '#e0a0ff');
+        FX.float(t.x * TILE + 8, t.y * TILE - 16, '+1 ' + ITEMS.gem.n.toUpperCase(), '#e0a0ff');
         AudioSys.play('coin');
       }
       AudioSys.play('break');
@@ -394,13 +445,13 @@ const Game = {
     const def = ITEMS[item.id];
     if (World.current !== 'farm' || World.solidTile(null, t.x, t.y)) {
       AudioSys.play('error');
-      FX.float(Player.x, Player.y - 24, 'TILL FIRST', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.till_first'), '#e0a0a0');
       return;
     }
     const cur = World.tileAt('farm', t.x, t.y);
     if (cur !== T.SOIL && cur !== T.SOIL_WET) {
       AudioSys.play('error');
-      FX.float(Player.x, Player.y - 24, 'TILL FIRST', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.till_first'), '#e0a0a0');
       return;
     }
     if (map.crops[key]) { AudioSys.play('error'); return; }
@@ -420,30 +471,42 @@ const Game = {
     const def = CROPS[cr.id];
     delete map.crops[key];
     const left = this.addItem(cr.id, 1);
-    if (left > 0) FX.toast('INVENTORY FULL', '#e0453f');
+    if (left > 0) FX.toast(L('msg.inv_full'), '#e0453f');
     else {
       FX.float(x * TILE + 8, y * TILE, '+' + ITEMS[cr.id].n.toUpperCase(), '#a8e8a0');
       AudioSys.play('harvest');
     }
+    Story.onHarvest();
     this.hinted('harvest');
   },
 
   eat: function () {
-    const item = this.selItem();
+    return this.eatSlot(this.selected);
+  },
+
+  eatSlot: function (i) {
+    const item = this.inv[i];
     if (!item) return false;
     const def = ITEMS[item.id];
     if (!def || !def.food) return false;
     this.energy = Math.min(MAX_ENERGY, this.energy + def.food);
     item.n -= 1;
-    if (item.n <= 0) this.inv[this.selected] = null;
+    if (item.n <= 0) this.inv[i] = null;
     AudioSys.play('eat');
-    FX.float(Player.x, Player.y - 26, '+' + def.food + ' ENERGY', '#f7e07a');
+    FX.float(Player.x, Player.y - 26, '+' + def.food + ' ' + L('energy_food', { x: '', y: '' }).replace(/^\+?\s*\d*\s*/, '').trim() || 'ENERGY', '#f7e07a');
     return true;
   },
 
 // ==== mail: letters, attachments, village requests =================
 
   welcomeMail: function () {
+    if (typeof L === 'function') {
+      return {
+        from: 'SUNVALE POST', subject: L('mail.welcome.sub'),
+        body: L('mail.welcome.body').split('|'),
+        att: { gold: 150 }
+      };
+    }
     return {
       from: 'SUNVALE POST', subject: 'WELCOME TO SUNVALE',
       body: [
@@ -470,7 +533,7 @@ const Game = {
   pushMail: function (t) {
     this.mail.unshift(this.mkMail(t));
     while (this.mail.length > 24) this.mail.pop();
-    FX.toast('NEW MAIL HAS ARRIVED', '#a0d0f0');
+    FX.toast(L('msg.new_mail'), '#a0d0f0');
     AudioSys.play('open');
   },
 
@@ -503,7 +566,7 @@ const Game = {
     if (m.att.item) {
       const left = this.addItem(m.att.item, m.att.n);
       if (left > 0) {
-        FX.toast('INVENTORY FULL', '#e0453f');
+        FX.toast(L('msg.inv_full'), '#e0453f');
         AudioSys.play('error');
         return;
       }
@@ -519,7 +582,7 @@ const Game = {
     if (!m || !m.req || m.reqDone) return;
     const r = m.req;
     if (this.countItem(r.item) < r.n) {
-      FX.toast('NEED ' + r.n + ' ' + ITEMS[r.item].n.toUpperCase(), '#e0453f');
+      FX.toast(L('msg.need', { x: r.n, y: ITEMS[r.item].n.toUpperCase() }), '#e0453f');
       AudioSys.play('error');
       return;
     }
@@ -529,7 +592,7 @@ const Game = {
     m.read = true;
     this.befriend(m.npc, 6);
     AudioSys.play('coin');
-    FX.toast('DELIVERED! +' + r.gold + 'G', '#f7e07a');
+    FX.toast(L('msg.delivered', { x: r.gold }), '#f7e07a');
     this.save();
   },
 
@@ -563,6 +626,13 @@ const Game = {
   },
 
   weekMail: function () {
+    if (typeof L === 'function') {
+      return {
+        from: 'SUNVALE POST', subject: L('mail.week.sub'),
+        body: L('mail.week.body').split('|'),
+        att: { gold: 120 }
+      };
+    }
     return {
       from: 'SUNVALE POST', subject: 'YOUR FIRST WEEK',
       body: [
@@ -596,7 +666,7 @@ const Game = {
       }
     }
     if (this.friendshipHearts(id) > Math.floor(before / 20)) {
-      FX.toast(def.name.toUpperCase() + ' IS A CLOSER FRIEND', '#ff9a94');
+      FX.toast(L('msg.closer', { x: def.name.toUpperCase() }), '#ff9a94');
     }
   },
 
@@ -612,19 +682,19 @@ const Game = {
   giveGift: function () {
     const t = nearestInteract();
     if (!t || t.kind !== 'npc') {
-      FX.float(Player.x, Player.y - 24, 'NO ONE NEARBY', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.no_one'), '#e0a0a0');
       AudioSys.play('error');
       return;
     }
     const item = this.selItem();
     if (!item) {
-      FX.float(Player.x, Player.y - 24, 'HOLD A GIFT FIRST', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.hold_gift'), '#e0a0a0');
       AudioSys.play('error');
       return;
     }
     const gain = this.giftGain(t.npc, item);
     if (gain <= 0) {
-      FX.float(Player.x, Player.y - 24, 'NOT A GIFT', '#e0a0a0');
+      FX.float(Player.x, Player.y - 24, L('msg.not_gift'), '#e0a0a0');
       AudioSys.play('error');
       return;
     }
@@ -636,10 +706,10 @@ const Game = {
     AudioSys.play('pet');
     FX.hearts.push({ x: t.npc.x, y: t.npc.y - 14, t: 0 });
     FX.hearts.push({ x: t.npc.x - 7, y: t.npc.y - 8, t: 0.25 });
-    FX.float(t.npc.x, t.npc.y - 26, '+' + gain + ' FRIENDSHIP', '#ff9a94');
+    FX.float(t.npc.x, t.npc.y - 26, '+' + gain + ' ' + L('friendship').toUpperCase(), '#ff9a94');
     FX.float(t.npc.x, t.npc.y - 38, GIFT_THANKS[(Math.random() * GIFT_THANKS.length) | 0], '#f7e07a');
     if (Math.random() < 0.4) this.say(t.npc.def.name, t.npc.def.palette,
-      ['What a lovely gift! Thank you, farmer.'], t.npc.def.id);
+      [L('gift.line')], t.npc.def.id);
   },
 
   hinted: function (k) { },
@@ -672,9 +742,9 @@ const Game = {
     if (t.kind === 'tv') {
       AudioSys.play('open');
       this.say('TV', 'juniper', [
-        'WEATHER REPORT FOR TOMORROW...',
-        'EXPECT ' + this.weatherName(this.nextWeather) + '. PLAN ACCORDINGLY!',
-        'AND NOW, BACK TO OUR PROGRAMMING.'
+        L('tv.0'),
+        L('tv.1', { x: this.weatherName(this.nextWeather) }),
+        L('tv.2')
       ]);
       return;
     }
@@ -697,15 +767,28 @@ const Game = {
       this.openShop();
       return;
     }
+    if (t.kind === 'board') {
+      this.openJournal();
+      return;
+    }
+    if (t.kind === 'stove') {
+      this.openCook();
+      return;
+    }
     if (t.kind === 'npc') {
       const n = t.npc;
       const line = n.def.lines[(Math.random() * n.def.lines.length) | 0];
       if (!n.talked) {
         n.talked = true;
         this.befriend(n.def.id, 2);
-        FX.float(Player.x, Player.y - 28, '+2 FRIENDSHIP', '#ff9a94');
+        FX.float(Player.x, Player.y - 28, L('msg.talked'), '#ff9a94');
       }
-      this.say(n.def.name, n.def.palette, [line], n.def.id);
+      if (Story.noteTalk(n.def.id)) { AudioSys.play('pet'); return; }
+      const pages = [];
+      const intro = Story.introFor(n.def.id);
+      if (intro) for (let pi = 0; pi < intro.length; pi++) pages.push(intro[pi]);
+      pages.push(line);
+      this.say(n.def.name, n.def.palette, pages, n.def.id);
       AudioSys.play('pet');
       return;
     }
@@ -715,10 +798,10 @@ const Game = {
         c.petted = true;
         AudioSys.play('cluck');
         FX.hearts.push({ x: c.x, y: c.y - 10, t: 0 });
-        FX.float(c.x, c.y - 16, 'CLUCK!', '#f0e6d0');
+        FX.float(c.x, c.y - 16, L('msg.cluck_bang'), '#f0e6d0');
       } else {
         AudioSys.play('cluck');
-        FX.float(c.x, c.y - 16, 'CLUCK', '#f0e6d0');
+        FX.float(c.x, c.y - 16, L('msg.cluck'), '#f0e6d0');
       }
       return;
     }
@@ -754,26 +837,122 @@ const Game = {
     AudioSys.play('open');
   },
 
+  bagSize: function () { return this.upg && this.upg.bag ? 50 : 30; },
+  chestSize: function () { return this.upg && this.upg.chest ? 40 : 20; },
+
+  openJournal: function () {
+    this.state = 'journal';
+    AudioSys.play('open');
+  },
+
+  openCook: function () {
+    this.state = 'cook';
+    AudioSys.play('open');
+  },
+
+  canCook: function (r) {
+    for (const id in r.need) if (this.countItem(id) < r.need[id]) return false;
+    return true;
+  },
+
+  cookRecipe: function (r) {
+    if (!this.canCook(r)) { AudioSys.play('error'); FX.toast('MISSING INGREDIENTS', '#e0453f'); return; }
+    if (!this.useEnergy(3)) return;
+    for (const id in r.need) this.removeItem(id, r.need[id]);
+    const left = this.addItem(r.out, 1);
+    if (left > 0) {
+      FX.toast(L('msg.inv_full'), '#e0453f');
+      AudioSys.play('error');
+      return;
+    }
+    Story.onCook();
+    AudioSys.play('coin');
+    FX.toast('COOKED ' + ITEMS[r.out].n.toUpperCase(), '#f7e07a');
+    this.save();
+  },
+
+  toggleFav: function (i) {
+    const s = this.inv[i];
+    if (!s || i < 4) return;
+    s.fav = !s.fav;
+    AudioSys.play('select');
+  },
+
+  sortInv: function () {
+    const head = this.inv.slice(0, 4);
+    const rest = [];
+    for (let i = 4; i < this.inv.length; i++) if (this.inv[i]) rest.push(this.inv[i]);
+    rest.sort(function (a, b) {
+      const fa = a.fav ? 1 : 0, fb = b.fav ? 1 : 0;
+      if (fa !== fb) return fb - fa;
+      const da = ITEMS[a.id], db = ITEMS[b.id];
+      if (da.k !== db.k) return String(da.k) < String(db.k) ? -1 : 1;
+      if (da.n !== db.n) return String(da.n) < String(db.n) ? -1 : 1;
+      return b.n - a.n;
+    });
+    this.inv = head.concat(rest);
+    while (this.inv.length < this.bagSize()) this.inv.push(null);
+    AudioSys.play('select');
+    FX.toast('BAG SORTED', '#a8e8a0');
+  },
+
+  moveSlot: function (list, i) {
+    const from = list === 'inv' ? this.inv : this.chest;
+    const to = list === 'inv' ? this.chest : this.inv;
+    const s = from[i];
+    if (!s) return;
+    if (list === 'inv' && i < 4) { FX.toast('TOOLS STAY PUT', '#e0a0a0'); AudioSys.play('error'); return; }
+    const start = to === this.inv ? 4 : 0;
+    for (let j = start; j < to.length; j++) {
+      const t = to[j];
+      if (t && t.id === s.id && t.n < this.stackMax(t.id)) {
+        const add = Math.min(s.n, this.stackMax(t.id) - t.n);
+        t.n += add; s.n -= add;
+        if (s.n <= 0) { from[i] = null; AudioSys.play('select'); return; }
+      }
+    }
+    for (let j = start; j < to.length; j++) {
+      if (!to[j]) { to[j] = s; from[i] = null; AudioSys.play('select'); return; }
+    }
+    AudioSys.play('error');
+    FX.toast('NO ROOM', '#e0453f');
+  },
+
+  buyUpgrade: function (id) {
+    let u = null;
+    for (const x of UPGRADES) if (x.id === id) u = x;
+    if (!u) return;
+    if (this.upg[id]) { FX.toast('ALREADY OWNED', '#e0a0a0'); AudioSys.play('error'); return; }
+    if (this.money < u.cost) { AudioSys.play('error'); FX.toast(L('msg.not_enough_gold'), '#e0453f'); return; }
+    this.money -= u.cost;
+    this.upg[id] = 1;
+    if (id === 'bag') while (this.inv.length < this.bagSize()) this.inv.push(null);
+    if (id === 'chest') while (this.chest.length < this.chestSize()) this.chest.push(null);
+    AudioSys.play('coin');
+    FX.toast('UPGRADED: ' + u.n, '#f7e07a');
+    this.save();
+  },
+
   buy: function (id) {
     if (id === 'chicken') {
-      if (this.money < 800) { AudioSys.play('error'); FX.toast('NOT ENOUGH GOLD', '#e0453f'); return; }
+      if (this.money < 800) { AudioSys.play('error'); FX.toast(L('msg.not_enough_gold'), '#e0453f'); return; }
       const farm = World.maps.farm;
-      if (farm.chickens.length >= 6) { AudioSys.play('error'); FX.toast('COOP IS FULL', '#e0453f'); return; }
+      if (farm.chickens.length >= 6) { AudioSys.play('error'); FX.toast(L('msg.coop_full'), '#e0453f'); return; }
       this.money -= 800;
       farm.chickens.push({
         x: 42 * TILE, y: 26 * TILE, dir: -1, frame: 0, anim: 0,
         tx: 42, ty: 26, state: 'idle', wait: 1, petted: false, moving: false
       });
       AudioSys.play('coin');
-      FX.toast('A CHICKEN JOINS YOUR COOP!', '#f7e07a');
+      FX.toast(L('msg.chicken_joins'), '#f7e07a');
       this.save();
       return;
     }
     const def = ITEMS[id];
     if (!def || def.buy === undefined) return;
-    if (this.money < def.buy) { AudioSys.play('error'); FX.toast('NOT ENOUGH GOLD', '#e0453f'); return; }
+    if (this.money < def.buy) { AudioSys.play('error'); FX.toast(L('msg.not_enough_gold'), '#e0453f'); return; }
     const left = this.addItem(id, 1);
-    if (left > 0) { FX.toast('INVENTORY FULL', '#e0453f'); AudioSys.play('error'); return; }
+    if (left > 0) { FX.toast(L('msg.inv_full'), '#e0453f'); AudioSys.play('error'); return; }
     this.money -= def.buy;
     AudioSys.play('coin');
   },
@@ -783,8 +962,10 @@ const Game = {
     if (!s) return;
     const def = ITEMS[s.id];
     if (!def || def.sell === undefined) return;
+    if (s.fav) { FX.toast('FAVOURITED ITEM', '#ff9a94'); AudioSys.play('error'); return; }
     const total = def.sell * s.n;
     this.money += total;
+    Story.onSell(total);
     FX.float(Player.x, Player.y - 24, '+' + total + 'G', '#f7e07a');
     this.inv[i] = null;
     AudioSys.play('coin');
@@ -794,7 +975,7 @@ const Game = {
     let total = 0;
     for (let i = 4; i < this.inv.length; i++) {
       const s = this.inv[i];
-      if (!s) continue;
+      if (!s || s.fav) continue;
       const def = ITEMS[s.id];
       if (!def || def.sell === undefined) continue;
       total += def.sell * s.n;
@@ -802,6 +983,7 @@ const Game = {
     }
     if (total <= 0) { AudioSys.play('error'); return; }
     this.money += total;
+    Story.onSell(total);
     FX.toast('SOLD EVERYTHING FOR ' + total + 'G', '#f7e07a');
     AudioSys.play('coin');
   },
@@ -866,8 +1048,8 @@ const Game = {
     if (eggs > 0) {
       const left = this.addItem('egg', eggs);
       const got = eggs - left;
-      if (got > 0) FX.toast('YOUR CHICKENS LAID ' + got + (got === 1 ? ' EGG' : ' EGGS'), '#f0e6d0');
-      if (left > 0) FX.toast('EGGS SPOILED - INVENTORY FULL', '#e0453f');
+      if (got > 0) FX.toast(L('msg.laid', { x: got }), '#f0e6d0');
+      if (left > 0) FX.toast(L('msg.eggs_spoiled'), '#e0453f');
     }
 
     for (const n of farm.npcs) { n.talked = false; n.giftT = 0; }
@@ -882,8 +1064,8 @@ const Game = {
     this.state = 'play';
     AudioSys.play('wake');
     this.save();
-    FX.toast('DAY ' + this.day + ' - ' + this.weatherName(this.weather), '#f7e07a');
-    if (rainy) FX.toast('RAIN WATERS YOUR CROPS', '#a0d0f0');
+    FX.toast(L('msg.day_weather', { x: this.day, y: this.weatherName(this.weather) }), '#f7e07a');
+    if (rainy) FX.toast(L('msg.rain_waters'), '#a0d0f0');
   },
 
   passOut: function () {
@@ -927,17 +1109,18 @@ const Game = {
     Player.update(dt);
     updateNPCs(dt);
     updateChickens(dt);
+    Story.tick();
 
     this.timeMin += dt / SEC_PER_MIN;
     this.clockAcc += dt;
     if (this.timeMin >= DAY_END) {
       this.timeMin = DAY_END;
-      FX.toast('YOU PASSED OUT FROM EXHAUSTION', '#e0453f');
+      FX.toast(L('msg.passed_out'), '#e0453f');
       this.passOut();
       return;
     }
     if (this.energy <= 0) {
-      FX.toast('YOU PASSED OUT FROM EXHAUSTION', '#e0453f');
+      FX.toast(L('msg.passed_out'), '#e0453f');
       this.passOut();
     }
   },

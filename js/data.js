@@ -32,7 +32,7 @@ const T = {
 };
 
 const TILE_SOLID = [false, false, false, false, true, false, false, false, true, false, false, false, false, false, true, false];
-const TILE_FARM = [true, true, true, false, false, false, false, false, false, false, false, false, false, false, false, false];
+const TILE_FARM = [true, true, true, false, false, true, true, false, false, false, false, false, false, false, false, false];
 const TILE_WETABLE = [false, false, false, false, false, true, true, false, false, false, false, false, false, false, false, false];
 
 const ENERGY = { till: 2, water: 1, chop: 3, mine: 3 };

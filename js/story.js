@@ -12,6 +12,7 @@
 
 const Story = {
   i: 0, introShown: {}, done: false, busy: false,
+  satisfied: {},
   stats: { harvested: 0, cooked: 0, sold: 0 },
 
   reset: function () {
@@ -19,6 +20,7 @@ const Story = {
     this.introShown = {};
     this.done = false;
     this.busy = false;
+    this.satisfied = {};
     this.stats = { harvested: 0, cooked: 0, sold: 0 };
   },
 
@@ -35,17 +37,18 @@ const Story = {
 // ---- objective helpers --------------------------------------------
 
   objectiveLabel: function (o) {
+    const loc = (typeof L === 'function') ? L : function (k) { return k; };
     if (o.type === 'talk') {
       const d = this.def(o.npc);
-      return 'TALK TO ' + (d ? d.name.toUpperCase() : o.npc.toUpperCase());
+      return loc('objective.talk', { x: (d ? d.name.toUpperCase() : o.npc.toUpperCase()) });
     }
-    if (o.type === 'collect') return 'HOLD ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase();
+    if (o.type === 'collect') return loc('objective.collect', { x: o.n, y: ITEMS[o.id].n.toUpperCase() });
     if (o.type === 'deliver') {
       const d = this.def(o.npc);
-      return 'DELIVER ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase() + ' TO ' + (d ? d.name.toUpperCase() : '');
+      return loc('objective.deliver', { x: o.n, y: ITEMS[o.id].n.toUpperCase(), z: (d ? d.name.toUpperCase() : '') });
     }
-    if (o.type === 'cook') return 'COOK ' + o.n + ' DISHES AT HOME';
-    if (o.type === 'sold') return 'SELL ' + o.n + 'G WORTH OF GOODS';
+    if (o.type === 'cook') return loc('objective.cook', { x: o.n });
+    if (o.type === 'sold') return loc('objective.sold', { x: o.n });
     return '';
   },
 
@@ -60,24 +63,25 @@ const Story = {
     const ch = this.chapter();
     if (!ch) return [];
     const out = [];
-    for (const o of ch.obj) {
-      const p = this.objectiveProgress(o);
-      out.push({ text: this.objectiveLabel(o), prog: p, met: this.met(o) });
+    for (let i = 0; i < ch.obj.length; i++) {
+      const o = ch.obj[i];
+      out.push({ text: this.objectiveLabel(o), prog: this.objectiveProgress(o), met: this.met(o, i) });
     }
     return out;
   },
 
-  met: function (o) {
+  met: function (o, idx) {
     if (o.type === 'collect') return Game.countItem(o.id) >= o.n;
     if (o.type === 'cook') return this.stats.cooked >= o.n;
     if (o.type === 'sold') return this.stats.sold >= o.n;
-    return false;
+    const ch = this.chapter();
+    return !!(ch && this.satisfied[ch.id + ':' + idx]);
   },
 
   ready: function () {
     const ch = this.chapter();
     if (!ch) return false;
-    for (const o of ch.obj) if (!this.met(o)) return false;
+    for (let i = 0; i < ch.obj.length; i++) if (!this.met(ch.obj[i], i)) return false;
     return true;
   },
 
@@ -96,21 +100,22 @@ const Story = {
   noteTalk: function (npcId) {
     const ch = this.chapter();
     if (!ch || this.done) return false;
-    let touched = false;
-    for (const o of ch.obj) {
-      if (o.type === 'talk' && o.npc === npcId) touched = true;
+    for (let i = 0; i < ch.obj.length; i++) {
+      const o = ch.obj[i];
+      if (o.type === 'talk' && o.npc === npcId) this.satisfied[ch.id + ':' + i] = true;
       if (o.type === 'deliver' && o.npc === npcId) {
         if (Game.countItem(o.id) >= o.n) {
           Game.removeItem(o.id, o.n);
           FX.toast('DELIVERED ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase(), '#a8e8a0');
-          touched = true;
+          this.satisfied[ch.id + ':' + i] = true;
         } else {
           FX.toast('THEY WANT ' + o.n + ' ' + ITEMS[o.id].n.toUpperCase(), '#e0a0a0');
         }
       }
     }
-    if (touched || this.ready()) {
-      if (this.ready()) { this.complete(); return true; }
+    if (this.ready()) {
+      this.complete();
+      return true;
     }
     return false;
   },
@@ -159,7 +164,10 @@ const Story = {
 // ---- persistence ---------------------------------------------------
 
   serialize: function () {
-    return { i: this.i, done: this.done, intro: this.introShown, stats: this.stats };
+    return {
+      i: this.i, done: this.done, intro: this.introShown,
+      stats: this.stats, satisfied: this.satisfied
+    };
   },
 
   applySave: function (d) {
@@ -167,6 +175,7 @@ const Story = {
     this.i = d.i || 0;
     this.done = !!d.done;
     this.introShown = d.intro || {};
+    this.satisfied = d.satisfied || {};
     this.stats = d.stats || { harvested: 0, cooked: 0, sold: 0 };
     if (this.i >= STORY.length) { this.i = STORY.length - 1; this.done = true; }
   }

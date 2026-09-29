@@ -18,14 +18,18 @@
      drawDialogue                   typewriter box (reads Game.dialogue)
      drawInventory/slotClick/drag   inventory + chest, drag to move stacks
      drawShop/drawMail              full-screen menus (state 'shop'/'mail')
-     drawPause/drawHelp/drawTitle   overlays; drawTitle owns the title buttons
+      drawPause/drawSettings/drawHelp/drawTitle   overlays; drawTitle owns the
+                                    title menu, drawSettings the AUDIO/GAME/
+                                    CONTROLS tabs (sliders, RPC, rebinds)
 
-   State lives in Game (state, chestOpen, helpOpen...); UI only reads it and
-   mutates it in button callbacks. Keep new screens in the draw() switch AND
-   in main.js onKey()'s switch, or keyboard and mouse will disagree. */
+   State lives in Game (state, chestOpen, helpOpen...) plus UI.settingsOpen /
+   UI.capture (key rebind in progress); UI only reads it and mutates it in
+   button callbacks. Keep new screens in the draw() switch AND in main.js
+   onKey()'s switch, or keyboard and mouse will disagree. */
 
 const UI = {
   regions: [], held: null, tip: null, mx: 0, my: 0,
+  btn: 0, shift: false,
   helpOpen: false, selNameT: 0, lastSel: -1,
   settingsOpen: false, settingsTab: 'audio', capture: null, drag: null,
   titleSel: 0, titleItems: [], arm: { new: 0, del: 0 },
@@ -163,6 +167,13 @@ const UI = {
       if (stack.n > 1) {
         PixelFont.shadow(g, String(stack.n), x + s - 4, y + s - 9, '#ffffff', 1, 'right');
       }
+      if (stack.fav) {
+        g.fillStyle = '#ff9a94';
+        g.fillRect(x + s - 9, y + 4, 3, 3);
+        g.fillRect(x + s - 6, y + 4, 3, 3);
+        g.fillRect(x + s - 8, y + 7, 3, 2);
+        g.fillRect(x + s - 7, y + 9, 1, 1);
+      }
       if (label) PixelFont.shadow(g, label, x + s / 2, y + s - 9, '#f7e07a', 1, 'center');
     }
   },
@@ -207,6 +218,7 @@ const UI = {
       }
       this.drawTitle(g, dt);
       if (this.helpOpen) { this.dim(g, 0.6); this.drawHelp(g); }
+      if (this.settingsOpen) { this.dim(g, 0.72); this.drawSettings(g); }
       this.drawToasts(g);
       this.fade(g);
       this.drawCursor(g);
@@ -220,10 +232,12 @@ const UI = {
     else if (Game.state === 'shop') { this.dim(g); this.drawShop(g); }
     else if (Game.state === 'mail') { this.dim(g); this.drawMail(g); }
     else if (Game.state === 'pause') { this.dim(g); this.drawPause(g); }
+    else if (Game.state === 'journal') { this.dim(g); this.drawJournal(g); }
+    else if (Game.state === 'cook') { this.dim(g); this.drawCook(g); }
     else if (Game.state === 'dialogue') this.drawDialogue(g);
 
     if (this.helpOpen) { this.dim(g, 0.6); this.drawHelp(g); }
-    if (this.settingsOpen && Game.state === 'pause') { this.dim(g, 0.72); this.drawSettings(g); }
+    if (this.settingsOpen) { this.dim(g, 0.72); this.drawSettings(g); }
     if (this.held) this.drawHeld(g);
     this.fade(g);
     this.drawCursor(g);
@@ -242,7 +256,7 @@ const UI = {
 
   drawHUD: function (g) {
     this.panel(g, 12, 12, 210, 56);
-    PixelFont.shadow(g, 'DAY ' + Game.day + '  ' + Game.dayName(), 22, 20, '#f0e6d0', 1);
+    PixelFont.shadow(g, L('day') + ' ' + Game.day + '  ' + Game.dayName(), 22, 20, '#f0e6d0', 1);
     PixelFont.shadow(g, Game.clockText(), 22, 36, '#f7e07a', 2);
     const wIco = Game.weather === 'sunny' ? Sprites.ui.sun : Game.weather === 'rain' ? Sprites.ui.rain : Sprites.ui.storm;
     g.drawImage(wIco, 176, 18, 20, 20);
@@ -259,7 +273,7 @@ const UI = {
     g.fillStyle = mHov ? '#d9b489' : '#7a5c3a'; g.fillRect(mbx - 1, mby - 1, mbw + 2, mbh + 2);
     g.fillStyle = mHov ? '#5a4530' : '#3a2c20'; g.fillRect(mbx, mby, mbw, mbh);
     g.drawImage(Sprites.ui.mail, mbx + 6, mby + 7);
-    PixelFont.shadow(g, 'MAIL', mbx + 27, mby + 9, unread ? '#f7e07a' : '#9c8a70', 1);
+    PixelFont.shadow(g, L('mail'), mbx + 27, mby + 9, unread ? '#f7e07a' : '#9c8a70', 1);
     if (unread > 0) {
       g.fillStyle = '#3d2c1d'; g.fillRect(mbx + mbw - 14, mby - 7, 18, 15);
       g.fillStyle = '#e0453f'; g.fillRect(mbx + mbw - 13, mby - 6, 16, 13);
@@ -308,6 +322,36 @@ const UI = {
     const sel = Game.inv[Game.selected];
     const nm = sel ? ITEMS[sel.id].n.toUpperCase() : 'EMPTY HANDS';
     PixelFont.shadow(g, nm, hx + hw, hy - 14, '#f0e6d0', 1, 'right');
+    if (Game.state === 'play') this.drawTracker(g);
+  },
+
+  drawTracker: function (g) {
+    const w = 168;
+    const x = Renderer.W - w - 12, y = 86;
+    const ch = Story.chapter();
+    if (!ch) {
+      this.panel(g, x, y, w, 34);
+      PixelFont.shadow(g, 'SUNVALE LIVES!', x + 10, y + 7, '#7fd06f', 1);
+      PixelFont.shadow(g, 'THE STORY IS TOLD.', x + 10, y + 20, '#9c8a70', 1);
+      return;
+    }
+    const obj = Story.lines();
+    const body = [];
+    for (const ln of obj) {
+      const txt = (ln.met ? '+ ' : '- ') + ln.text;
+      const wl = this.wrap(txt, w - 46, 1);
+      for (let k = 0; k < wl.length; k++) body.push({ t: wl[k], met: ln.met, prog: k === wl.length - 1 ? ln.prog : null });
+    }
+    const h = 50 + body.length * 12;
+    this.panel(g, x, y, w, h);
+    PixelFont.shadow(g, 'CH ' + (Story.i + 1) + '/' + STORY.length + '  [J]', x + 8, y + 6, '#a0d0f0', 1);
+    PixelFont.shadow(g, this.fit(ch.title, w - 16, 1), x + 8, y + 19, '#f7e07a', 1);
+    g.fillStyle = '#5a4530'; g.fillRect(x + 8, y + 31, w - 16, 1);
+    for (let i = 0; i < body.length; i++) {
+      const b = body[i];
+      PixelFont.shadow(g, b.t, x + 8, y + 37 + i * 12, b.met ? '#7fd06f' : '#c9bba4', 1);
+      if (b.prog) PixelFont.shadow(g, b.prog, x + w - 8, y + 37 + i * 12, '#f7e07a', 1, 'right');
+    }
   },
 
   drawPrompt: function (g) {
@@ -317,7 +361,8 @@ const UI = {
       const map = {
         door: 'ENTER', exit: 'LEAVE', bed: 'SLEEP', tv: 'WATCH TV',
         chest: 'OPEN CHEST', sign: 'READ', mailbox: 'CHECK MAIL',
-        shop: 'SHOP', chicken: 'PET CHICKEN'
+        shop: 'SHOP', chicken: 'PET CHICKEN', board: 'READ NOTICE BOARD',
+        stove: 'COOK A DISH'
       };
       if (t.kind === 'npc') {
         const def = t.npc ? t.npc.def : null;
@@ -433,52 +478,82 @@ const UI = {
 // ---- inventory + chest ---------------------------------------------
 
   drawInventory: function (g) {
-    const rows = Game.chestOpen ? 5 : 3;
-    const w = 460, h = 40 + rows * 44 + 14;
-    const x = Math.floor((Renderer.W - w) / 2), y = Math.floor((Renderer.H - h) / 2);
+    const invRows = Math.ceil(Game.inv.length / 10);
+    const chestRows = Game.chestOpen ? Math.ceil(Game.chest.length / 10) : 0;
+    const invH = 40 + invRows * 44;
+    const chestH = Game.chestOpen ? 8 + 14 + chestRows * 44 + 4 : 0;
+    const w = 460, h = invH + chestH + 42;
+    const x = Math.floor((Renderer.W - w) / 2);
+    const y = Math.max(8, Math.floor((Renderer.H - h) / 2));
     this.panel(g, x, y, w, h, '#241a14');
     PixelFont.shadow(g, Game.chestOpen ? 'INVENTORY + CHEST' : 'INVENTORY', x + w / 2, y + 12, '#f7e07a', 1, 'center');
 
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < Game.inv.length; i++) {
       const col = i % 10, row = Math.floor(i / 10);
       const p = this.gridPos(x, y, col, row);
       const st = Game.inv[i];
       const sel = this.held && this.held.arr === Game.inv && this.held.i === i;
-      this.slot(g, p.x, p.y, 40, st, sel, i < 4 ? null : null);
+      this.slot(g, p.x, p.y, 40, st, sel, null);
       if (i < 4) {
         g.fillStyle = 'rgba(247,224,122,0.5)';
         g.fillRect(p.x + 4, p.y + 4, 3, 3);
       }
       (function (idx, self) {
-        self.region(p.x, p.y, 40, 40, function () { self.slotClick(Game.inv, idx); });
+        self.region(p.x, p.y, 40, 40, function () {
+          if (self.btn === 2) { self.slotAlt('inv', idx); return; }
+          if (self.shift && Game.chestOpen) { Game.moveSlot('inv', idx); return; }
+          self.slotClick(Game.inv, idx);
+        });
       })(i, this);
       if (st && this.mx >= p.x && this.mx < p.x + 40 && this.my >= p.y && this.my < p.y + 40)
-        this.tip = { id: st.id, n: st.n };
+        this.tip = { id: st.id, n: st.n, fav: st.fav };
     }
 
     if (Game.chestOpen) {
-      const cy = y + 40 + 3 * 44 + 8;
-      PixelFont.shadow(g, 'CHEST', x + 10, cy - 2, '#a0d0f0', 1);
-      for (let i = 0; i < 20; i++) {
+      const cy = y + invH + 8;
+      PixelFont.shadow(g, 'CHEST ' + Game.chest.length + ' SLOTS', x + 10, cy, '#a0d0f0', 1);
+      for (let i = 0; i < Game.chest.length; i++) {
         const col = i % 10, row = Math.floor(i / 10);
         const p = { x: x + 10 + col * 44, y: cy + 14 + row * 44 };
         const st = Game.chest[i];
         const sel = this.held && this.held.arr === Game.chest && this.held.i === i;
         this.slot(g, p.x, p.y, 40, st, sel, null);
         (function (idx, self) {
-          self.region(p.x, p.y, 40, 40, function () { self.slotClick(Game.chest, idx); });
+          self.region(p.x, p.y, 40, 40, function () {
+            if (self.btn === 2) { self.slotAlt('chest', idx); return; }
+            if (self.shift) { Game.moveSlot('chest', idx); return; }
+            self.slotClick(Game.chest, idx);
+          });
         })(i, this);
         if (st && this.mx >= p.x && this.mx < p.x + 40 && this.my >= p.y && this.my < p.y + 40)
           this.tip = { id: st.id, n: st.n };
       }
+      PixelFont.shadow(g, 'SHIFT+CLICK = QUICK MOVE   RIGHT CLICK = MOVE', x + 84, y + h - 22, '#7a6a56', 1);
+    } else {
+      PixelFont.shadow(g, 'RIGHT CLICK = EAT OR FAVOURITE', x + 84, y + h - 22, '#7a6a56', 1);
     }
-    this.button(g, x + w - 96, y + h - 4, 84, 20, 'CLOSE', function () {
+
+    this.button(g, x + 10, y + h - 30, 64, 20, 'SORT', function () { Game.sortInv(); });
+    this.button(g, x + w - 96, y + h - 30, 84, 20, 'CLOSE', function () {
       if (UI.held) { UI.held = null; }
       Game.chestOpen = false;
       Game.state = 'play';
       AudioSys.play('close');
     });
     this.drawTip(g);
+  },
+
+  slotAlt: function (list, i) {
+    if (list === 'chest') {
+      if (Game.chest[i]) Game.moveSlot('chest', i);
+      return;
+    }
+    if (i < 4) { AudioSys.play('error'); return; }
+    const s = Game.inv[i];
+    if (!s) return;
+    const def = ITEMS[s.id];
+    if (def && def.food) { Game.eatSlot(i); return; }
+    Game.toggleFav(i);
   },
 
   slotClick: function (arr, i) {
@@ -525,39 +600,69 @@ const UI = {
     const w = 660, h = 448;
     const x = Math.floor((Renderer.W - w) / 2), y = Math.floor((Renderer.H - h) / 2);
     this.panel(g, x, y, w, h, '#241a14');
-    PixelFont.shadow(g, 'GENERAL STORE', x + w / 2, y + 14, '#f7e07a', 2, 'center');
-    PixelFont.shadow(g, 'JUNIPER: "TAKE YOUR PICK, FARMER."', x + w / 2, y + 38, '#c9bba4', 1, 'center');
+    PixelFont.shadow(g, 'GENERAL STORE', x + w / 2, y + 12, '#f7e07a', 2, 'center');
+    PixelFont.shadow(g, 'JUNIPER: "TAKE YOUR PICK, FARMER."', x + w / 2, y + 34, '#c9bba4', 1, 'center');
 
+    const tabs = [['buy', 'BUY'], ['sell', 'SELL'], ['upg', 'UPGRADES']];
+    const tw = 116;
+    for (let i = 0; i < tabs.length; i++) {
+      (function (id, label, self) {
+        const tx = x + 14 + i * (tw + 8);
+        const on = Game.shopTab === id;
+        const hov = self.mx >= tx && self.mx < tx + tw && self.my >= y + 48 && self.my < y + 74;
+        g.fillStyle = '#0d0a07'; g.fillRect(tx - 2, y + 48, tw + 4, 26);
+        g.fillStyle = (hov || on) ? '#d9b489' : '#7a5c3a'; g.fillRect(tx - 1, y + 49, tw + 2, 24);
+        g.fillStyle = on ? '#4a3a26' : '#3a2c20'; g.fillRect(tx, y + 50, tw, 22);
+        if (on) { g.fillStyle = '#f7e07a'; g.fillRect(tx, y + 70, tw, 2); }
+        PixelFont.shadow(g, label, tx + tw / 2, y + 57, on || hov ? '#f7e07a' : '#c9bba4', 1, 'center');
+        self.region(tx - 2, y + 48, tw + 4, 26, function () {
+          Game.shopTab = id; AudioSys.play('select');
+        });
+      })(tabs[i][0], tabs[i][1], this);
+    }
+    g.drawImage(Sprites.ui.coin, x + w - 74, y + 52, 14, 14);
+    PixelFont.shadow(g, Game.money.toLocaleString('en-US') + 'G', x + w - 16, y + 54, '#f7e07a', 1, 'right');
     g.fillStyle = '#7a5c3a';
-    g.fillRect(x + 326, y + 54, 1, h - 96);
-    PixelFont.shadow(g, 'BUY', x + 16, y + 56, '#7fd06f', 1);
-    PixelFont.shadow(g, 'SELL', x + 344, y + 56, '#f0d24a', 1);
+    g.fillRect(x + 14, y + 80, w - 28, 1);
 
+    if (Game.shopTab === 'sell') this.drawSellTab(g, x, y, w, h);
+    else if (Game.shopTab === 'upg') this.drawUpgTab(g, x, y, w, h);
+    else this.drawBuyTab(g, x, y, w, h);
+
+    this.button(g, x + w - 116, y + h - 42, 104, 22, 'CLOSE [ESC]', function () {
+      Game.state = 'play'; AudioSys.play('close'); Game.save();
+    });
+    this.drawTip(g);
+  },
+
+  drawBuyTab: function (g, x, y, w, h) {
     const stock = SHOP_STOCK;
     for (let i = 0; i < stock.length; i++) {
       const id = stock[i];
       const col = i % 2, row = Math.floor(i / 2);
-      const cx = x + 14 + col * 154, cy = y + 74 + row * 106;
-      const cw = 146, chh = 98;
+      const cx = x + 14 + col * 322, cy = y + 88 + row * 76;
+      const cw = 310, chh = 72;
       g.fillStyle = '#1a130e'; g.fillRect(cx, cy, cw, chh);
       g.fillStyle = '#3d2c1d'; g.fillRect(cx, cy, cw, 1);
       const isChicken = id === 'chicken';
       const icon = isChicken ? Sprites.chicken[0] : Sprites.items[id];
-      if (icon) g.drawImage(icon, cx + 6, cy + 8);
+      if (icon) g.drawImage(icon, cx + 8, cy + 8);
       const name = isChicken ? 'CHICKEN' : ITEMS[id].n.toUpperCase();
-      PixelFont.shadow(g, name, cx + 30, cy + 8, '#f0e6d0', 1);
+      PixelFont.shadow(g, name, cx + 30, cy + 7, '#f0e6d0', 1);
       const price = isChicken ? 800 : ITEMS[id].buy;
-      g.drawImage(Sprites.ui.coin, cx + 30, cy + 24, 12, 12);
-      PixelFont.shadow(g, String(price), cx + 46, cy + 26, '#f7e07a', 1);
-      const d2 = isChicken ? 'A FRIENDLY BIRD' : ITEMS[id].d.toUpperCase();
-      const lines = this.wrap(d2, cw - 12, 1);
+      g.drawImage(Sprites.ui.coin, cx + 8, cy + 28, 12, 12);
+      PixelFont.shadow(g, String(price), cx + 24, cy + 30, '#f7e07a', 1);
+      const d2 = isChicken ? 'A FRIENDLY BIRD FOR THE COOP' : ITEMS[id].d.toUpperCase();
+      const lines = this.wrap(d2, cw - 112, 1);
       for (let li = 0; li < lines.length && li < 2; li++)
-        PixelFont.draw(g, lines[li], cx + 6, cy + 44, '#9c8a70', 1);
+        PixelFont.draw(g, lines[li], cx + 8, cy + 44 + li * 11, '#9c8a70', 1);
       (function (itemId, self) {
-        self.button(g, cx + 6, cy + chh - 24, cw - 12, 18, 'BUY', function () { Game.buy(itemId); });
+        self.button(g, cx + cw - 96, cy + 44, 88, 20, 'BUY', function () { Game.buy(itemId); });
       })(id, this);
     }
+  },
 
+  drawSellTab: function (g, x, y, w, h) {
     const groups = [];
     const seen = {};
     for (let i = 4; i < Game.inv.length; i++) {
@@ -565,42 +670,151 @@ const UI = {
       if (!s) continue;
       const def = ITEMS[s.id];
       if (!def || def.sell === undefined) continue;
+      if (s.fav) continue;
       if (!seen[s.id]) { seen[s.id] = { id: s.id, n: 0 }; groups.push(seen[s.id]); }
       seen[s.id].n += s.n;
     }
     if (!groups.length) {
-      PixelFont.draw(g, 'NOTHING TO SELL YET.', x + 344, y + 84, '#9c8a70', 1);
+      PixelFont.draw(g, 'NOTHING TO SELL YET.', x + 20, y + 96, '#9c8a70', 1);
+      PixelFont.draw(g, 'FAVOURITED ITEMS ARE NEVER SOLD.', x + 20, y + 112, '#7a6a56', 1);
     }
-    for (let i = 0; i < groups.length && i < 14; i++) {
+    for (let i = 0; i < groups.length && i < 12; i++) {
       const gr = groups[i];
-      const ry = y + 74 + i * 24;
+      const ry = y + 88 + i * 24;
       const def = ITEMS[gr.id];
       g.fillStyle = i % 2 ? '#1a130e' : '#20180f';
-      g.fillRect(x + 344, ry, 300, 22);
+      g.fillRect(x + 14, ry, w - 28, 22);
       const icon = Sprites.items[gr.id];
-      if (icon) g.drawImage(icon, x + 348, ry + 3, 16, 16);
-      PixelFont.draw(g, def.n.toUpperCase() + ' X' + gr.n, x + 370, ry + 8, '#f0e6d0', 1);
-      PixelFont.draw(g, (def.sell * gr.n) + 'G', x + 548, ry + 8, '#f7e07a', 1);
+      if (icon) g.drawImage(icon, x + 18, ry + 3, 16, 16);
+      PixelFont.draw(g, def.n.toUpperCase() + ' X' + gr.n, x + 40, ry + 8, '#f0e6d0', 1);
+      PixelFont.draw(g, (def.sell * gr.n) + 'G', x + 420, ry + 8, '#f7e07a', 1);
       (function (idx, self) {
-        self.button(g, x + 596, ry + 2, 44, 18, 'SELL', function () {
+        self.button(g, x + w - 90, ry + 2, 64, 18, 'SELL', function () {
           let total = 0;
           const id = groups[idx].id;
           for (let k = 0; k < Game.inv.length; k++) {
             const s = Game.inv[k];
-            if (s && s.id === id) { total += ITEMS[id].sell * s.n; Game.inv[k] = null; }
+            if (s && s.id === id && !s.fav) { total += ITEMS[id].sell * s.n; Game.inv[k] = null; }
           }
-          if (total > 0) { Game.money += total; AudioSys.play('coin'); FX.toast('+' + total + 'G', '#f7e07a'); }
+          if (total > 0) {
+            Game.money += total;
+            Story.onSell(total);
+            AudioSys.play('coin');
+            FX.toast('+' + total + 'G', '#f7e07a');
+          }
         });
       })(i, this);
     }
+    this.button(g, x + 14, y + h - 42, 150, 22, 'SELL EVERYTHING', function () { Game.sellAll(); });
+    PixelFont.draw(g, 'FAVOURITED STACKS ARE SKIPPED', x + 176, y + h - 36, '#7a6a56', 1);
+  },
 
-    this.button(g, x + 344, y + h - 42, 130, 22, 'SELL EVERYTHING', function () { Game.sellAll(); });
-    this.button(g, x + w - 116, y + h - 42, 104, 22, 'CLOSE [ESC]', function () {
-      Game.state = 'play'; AudioSys.play('close'); Game.save();
+  drawUpgTab: function (g, x, y, w, h) {
+    for (let i = 0; i < UPGRADES.length; i++) {
+      const u = UPGRADES[i];
+      const cx = x + 14, cy = y + 88 + i * 92;
+      const cw = w - 28, chh = 84;
+      const owned = !!Game.upg[u.id];
+      g.fillStyle = '#1a130e'; g.fillRect(cx, cy, cw, chh);
+      g.fillStyle = owned ? '#2f4a33' : '#3d2c1d'; g.fillRect(cx, cy, cw, 1);
+      if (owned) { g.fillStyle = 'rgba(127,208,111,0.10)'; g.fillRect(cx, cy, cw, chh); }
+      PixelFont.shadow(g, u.n, cx + 12, cy + 10, owned ? '#7fd06f' : '#f0e6d0', 1);
+      g.drawImage(Sprites.ui.coin, cx + 12, cy + 28, 12, 12);
+      PixelFont.shadow(g, String(u.cost), cx + 28, cy + 30, owned ? '#7fd06f' : '#f7e07a', 1);
+      const lines = this.wrap(u.d, cw - 140, 1);
+      for (let li = 0; li < lines.length && li < 2; li++)
+        PixelFont.draw(g, lines[li], cx + 12, cy + 48 + li * 12, '#9c8a70', 1);
+      if (owned) {
+        PixelFont.shadow(g, 'OWNED', cx + cw - 100, cy + 32, '#7fd06f', 1);
+      } else {
+        (function (uid, self) {
+          self.button(g, cx + cw - 110, cy + 26, 96, 24, 'UPGRADE', function () { Game.buyUpgrade(uid); });
+        })(u.id, this);
+      }
+    }
+    PixelFont.draw(g, 'STEEL TOOLS CUT EVERY TOOL COST BY 1 ENERGY.', x + 20, y + 88 + 3 * 92 + 8, '#7a6a56', 1);
+  },
+
+// ---- journal + cooking ---------------------------------------------
+
+  drawJournal: function (g) {
+    const w = 660, h = 452;
+    const x = Math.floor((Renderer.W - w) / 2), y = Math.max(8, Math.floor((Renderer.H - h) / 2));
+    this.panel(g, x, y, w, h, '#241a14');
+    PixelFont.shadow(g, 'VILLAGE JOURNAL', x + w / 2, y + 12, '#f7e07a', 2, 'center');
+    PixelFont.shadow(g, 'THE STORY OF SUNVALE', x + w / 2, y + 34, '#c9bba4', 1, 'center');
+    g.fillStyle = '#7a5c3a'; g.fillRect(x + 14, y + 48, w - 28, 1);
+
+    let ry = y + 56;
+    for (let i = 0; i < STORY.length; i++) {
+      const ch = STORY[i];
+      const done = i < Story.i || Story.done;
+      const cur = i === Story.i && !Story.done;
+      const lines = cur ? Story.lines() : [];
+      const rowH = cur ? 46 + lines.length * 13 : 32;
+      g.fillStyle = cur ? '#2c2318' : (i % 2 ? '#1a130e' : '#20180f');
+      g.fillRect(x + 14, ry, w - 28, rowH - 4);
+      if (cur) { g.fillStyle = '#f7e07a'; g.fillRect(x + 14, ry, 3, rowH - 4); }
+      PixelFont.shadow(g, (i + 1) + '. ' + this.fit(ch.title, 400, 1), x + 26, ry + 6,
+        done ? '#7fd06f' : cur ? '#f7e07a' : '#6f6152', 1);
+      PixelFont.shadow(g, done ? 'DONE' : cur ? 'NOW' : 'LOCKED', x + w - 66, ry + 6,
+        done ? '#7fd06f' : cur ? '#f7e07a' : '#6f6152', 1);
+      if (cur) {
+        PixelFont.draw(g, this.fit(ch.desc, w - 60, 1), x + 26, ry + 20, '#c9bba4', 1);
+        for (let k = 0; k < lines.length; k++) {
+          const ln = lines[k];
+          PixelFont.draw(g, (ln.met ? '[OK] ' : '[   ] ') + this.fit(ln.text, w - 150, 1),
+            x + 34, ry + 34 + k * 13, ln.met ? '#7fd06f' : '#f0e6d0', 1);
+          if (ln.prog) PixelFont.draw(g, ln.prog, x + w - 46, ry + 34 + k * 13, '#f7e07a', 1, 'right');
+        }
+      }
+      ry += rowH;
+    }
+    if (Story.done) {
+      PixelFont.shadow(g, 'SUNVALE LIVES! ALL CHAPTERS COMPLETE.', x + w / 2, y + h - 44, '#7fd06f', 1, 'center');
+    }
+    this.button(g, x + w - 116, y + h - 34, 104, 22, 'CLOSE [ESC]', function () {
+      Game.state = 'play'; AudioSys.play('close');
     });
-    g.drawImage(Sprites.ui.coin, x + w - 74, y + 52, 14, 14);
-    PixelFont.shadow(g, Game.money.toLocaleString('en-US') + 'G', x + w - 16, y + 54, '#f7e07a', 1, 'right');
-    this.drawTip(g);
+  },
+
+  drawCook: function (g) {
+    const w = 640, h = 420;
+    const x = Math.floor((Renderer.W - w) / 2), y = Math.max(8, Math.floor((Renderer.H - h) / 2));
+    this.panel(g, x, y, w, h, '#241a14');
+    PixelFont.shadow(g, 'THE STOVE', x + w / 2, y + 12, '#f7e07a', 2, 'center');
+    PixelFont.shadow(g, 'ENERGY ' + Math.ceil(Game.energy) + '/' + MAX_ENERGY +
+      '   -3 PER DISH', x + w / 2, y + 34, '#c9bba4', 1, 'center');
+    g.fillStyle = '#7a5c3a'; g.fillRect(x + 14, y + 48, w - 28, 1);
+
+    for (let i = 0; i < RECIPES.length; i++) {
+      const r = RECIPES[i];
+      const cx = x + 14, cy = y + 58 + i * 84;
+      const cw = w - 28, chh = 78;
+      const can = Game.canCook(r);
+      g.fillStyle = '#1a130e'; g.fillRect(cx, cy, cw, chh);
+      g.fillStyle = can ? '#3d2c1d' : '#2a2018'; g.fillRect(cx, cy, cw, 1);
+      const icon = Sprites.items[r.out];
+      if (icon) g.drawImage(icon, cx + 10, cy + 12);
+      PixelFont.shadow(g, ITEMS[r.out].n.toUpperCase(), cx + 36, cy + 8, can ? '#f7e07a' : '#9c8a70', 1);
+      PixelFont.draw(g, this.fit(ITEMS[r.out].d.toUpperCase(), 300, 1), cx + 36, cy + 22, '#9c8a70', 1);
+      PixelFont.draw(g, '+' + ITEMS[r.out].food + ' ENERGY  ' + ITEMS[r.out].sell + 'G', cx + 36, cy + 34, '#7fd06f', 1);
+
+      let ix = cx + 36;
+      for (const id in r.need) {
+        const have = Game.countItem(id), need = r.need[id];
+        const ok = have >= need;
+        const txt = ITEMS[id].n.toUpperCase() + ' ' + Math.min(have, need) + '/' + need;
+        PixelFont.draw(g, txt, ix, cy + 52, ok ? '#a8e8a0' : '#e0453f', 1);
+        ix += PixelFont.measure(txt, 1) + 14;
+      }
+      (function (rec, self) {
+        self.button(g, cx + cw - 104, cy + 26, 92, 26, 'COOK', function () { Game.cookRecipe(rec); });
+      })(r, this);
+    }
+    this.button(g, x + w - 116, y + h - 34, 104, 22, 'CLOSE [ESC]', function () {
+      Game.state = 'play'; AudioSys.play('close');
+    });
   },
 
 // ---- mail menu ------------------------------------------------------
@@ -739,36 +953,59 @@ const UI = {
 // ---- pause / help / title ------------------------------------------
 
   drawPause: function (g) {
-    const w = 300, h = 302;
+    const w = 300, h = 376;
     const x = Math.floor((Renderer.W - w) / 2), y = Math.floor((Renderer.H - h) / 2);
     this.panel(g, x, y, w, h, '#241a14');
-    PixelFont.shadow(g, 'PAUSED', x + w / 2, y + 16, '#f7e07a', 2, 'center');
+    PixelFont.shadow(g, L('paused'), x + w / 2, y + 16, '#f7e07a', 2, 'center');
     const bw = 220, bx = x + (w - bw) / 2;
     let by = y + 48;
-    this.button(g, bx, by, bw, 28, 'RESUME', function () { Game.state = 'play'; AudioSys.play('close'); });
+    this.button(g, bx, by, bw, 28, L('resume'), function () { Game.state = 'play'; AudioSys.play('close'); });
     by += 36;
     this.button(g, bx, by, bw, 28, 'SETTINGS', function () { UI.openSettings(); });
     by += 36;
-    this.button(g, bx, by, bw, 28, 'SAVE GAME', function () { Game.save(); FX.toast('GAME SAVED', '#7fd06f'); AudioSys.play('coin'); });
+    this.button(g, bx, by, bw, 28, L('save_game'), function () { Game.save(); FX.toast(L('msg.game_saved'), '#7fd06f'); AudioSys.play('coin'); });
     by += 36;
-    this.button(g, bx, by, bw, 28, 'HOW TO PLAY', function () { UI.helpOpen = true; AudioSys.play('open'); });
+    this.button(g, bx, by, bw, 28, L('how_to_play'), function () { UI.helpOpen = true; AudioSys.play('open'); });
     by += 36;
-    this.button(g, bx, by, bw, 28, (AudioSys.musicOn ? 'MUSIC: ON' : 'MUSIC: OFF'), function () {
+    this.button(g, bx, by, bw, 28, (AudioSys.musicOn ? L('music_on') : L('music_off')), function () {
       AudioSys.toggleMusic(); AudioSys.play('select');
     });
     by += 36;
-    this.button(g, bx, by, bw, 28, 'QUIT TO TITLE', function () {
+    // --- localisation: language cycler (auto-applied + persisted) ---
+    const langName = (function () {
+      try {
+        const cur = (typeof I18n !== 'undefined') ? I18n.lang : 'en';
+        const found = SUPPORTED_LANGS.find(function (l) { return l.code === cur; });
+        return (found ? found.name : cur).toUpperCase();
+      } catch (e) { return 'ENGLISH'; }
+    })();
+    this.button(g, bx, by, bw, 28, L('language') + ': ' + langName, function () { UI.cycleLang(1); AudioSys.play('select'); });
+    by += 36;
+    this.button(g, bx, by, bw, 28, L('quit_title'), function () {
       Game.save();
       Game.state = 'title';
       Renderer.titleCam = true;
       AudioSys.play('close');
     });
-    PixelFont.shadow(g, 'PROGRESS SAVES WHEN YOU SLEEP', x + w / 2, y + h - 16, '#9c8a70', 1, 'center');
+    PixelFont.shadow(g, 'FARM SEED ' + World.seed, x + w / 2, y + h - 30, '#9fe0c0', 1, 'center');
+    PixelFont.shadow(g, L('progress_sleep'), x + w / 2, y + h - 16, '#9c8a70', 1, 'center');
+  },
+
+  cycleLang: function (dir) {
+    try {
+      const codes = SUPPORTED_LANGS.map(function (l) { return l.code; });
+      let i = codes.indexOf(I18n.lang);
+      if (i < 0) i = 0;
+      i = (i + (dir || 1) + codes.length) % codes.length;
+      I18n.setLang(codes[i]);
+      try { Game.save(); } catch (e) {}
+    } catch (e) {}
   },
 
   drawSettings: function (g) {
     const w = 584, h = 404;
     const x = Math.floor((Renderer.W - w) / 2), y = Math.floor((Renderer.H - h) / 2);
+    this.region(0, 0, Renderer.W, Renderer.H, function () { });
     this.panel(g, x, y, w, h, '#241a14');
     PixelFont.shadow(g, 'SETTINGS', x + w / 2, y + 14, '#f7e07a', 2, 'center');
 
@@ -887,7 +1124,7 @@ const UI = {
   },
 
   drawHelp: function (g) {
-    const w = 400, h = 372;
+    const w = 400, h = 400;
     const x = Math.floor((Renderer.W - w) / 2), y = Math.floor((Renderer.H - h) / 2);
     this.panel(g, x, y, w, h, '#241a14');
     PixelFont.shadow(g, 'HOW TO PLAY', x + w / 2, y + 16, '#f7e07a', 2, 'center');
@@ -977,16 +1214,25 @@ const UI = {
   titleMenu: function () {
     const self = this;
     const items = [];
+    const langName = (function () {
+      try {
+        const cur = (typeof I18n !== 'undefined') ? I18n.lang : 'en';
+        const found = SUPPORTED_LANGS.find(function (l) { return l.code === cur; });
+        return (found ? found.name : cur).toUpperCase();
+      } catch (e) { return 'ENGLISH'; }
+    })();
     if (Game.hasSave) {
-      items.push({ label: 'CONTINUE FARM', fn: function () { self.startFarm(true); } });
+      items.push({ label: (typeof L === 'function') ? L('continue') : 'CONTINUE FARM', fn: function () { self.startFarm(true); } });
       items.push({
-        label: this.arm.new > 0 ? 'YES, START OVER' : 'NEW FARM',
+        label: this.arm.new > 0 ? 'YES, START OVER' : ((typeof L === 'function') ? L('new') : 'NEW FARM'),
         fn: function () { self.newFarmConfirm(); }
       });
     } else {
-      items.push({ label: 'START FARM', fn: function () { self.startFarm(false); } });
+      items.push({ label: (typeof L === 'function') ? L('start') : 'START FARM', fn: function () { self.startFarm(false); } });
     }
-    items.push({ label: 'HOW TO PLAY', fn: function () { UI.helpOpen = true; AudioSys.play('open'); } });
+    items.push({ label: (typeof L === 'function') ? L('how_to_play') : 'HOW TO PLAY', fn: function () { UI.helpOpen = true; AudioSys.play('open'); } });
+    items.push({ label: 'SETTINGS', fn: function () { UI.openSettings(); } });
+    items.push({ label: (typeof L === 'function') ? (L('language') + ': ' + langName) : ('LANGUAGE: ' + langName), fn: function () { UI.cycleLang(1); } });
     items.push({ label: AudioSys.muted ? 'SOUND: OFF' : 'SOUND: ON', fn: function () { UI.toggleSound(); } });
     return items;
   },
@@ -1100,7 +1346,8 @@ const UI = {
     const bh = small ? 30 : 34;
     const gap = small ? 6 : 8;
     const headH = info ? 26 : 0;
-    const ph = 12 + headH + items.length * bh + (items.length - 1) * gap + 8 + 14 + 12;
+    const seedH = 20;
+    const ph = 12 + headH + items.length * bh + (items.length - 1) * gap + 8 + seedH + gap + 14 + 12;
     const py = Math.round(H * (small ? 0.36 : 0.40));
 
     g.fillStyle = 'rgba(10,8,6,0.82)';
@@ -1149,7 +1396,32 @@ const UI = {
       iy += bh + gap;
     }
 
-    PixelFont.shadow(g, 'ARROW KEYS + ENTER', W / 2, iy + 6, '#8f7f6a', 1, 'center');
+    const sy = iy + 4;
+    g.fillStyle = '#0d0a07'; g.fillRect(bx - 2, sy - 2, bw + 4, seedH + 4);
+    g.fillStyle = '#7a5c3a'; g.fillRect(bx - 1, sy - 1, bw + 2, seedH + 2);
+    g.fillStyle = '#2b2016'; g.fillRect(bx, sy, bw, seedH);
+    PixelFont.shadow(g, 'SEED', bx + 9, sy + 7, '#f0d24a', 1);
+    const fw = 118, fx = bx + 48;
+    g.fillStyle = '#17120e'; g.fillRect(fx, sy + 4, fw, seedH - 8);
+    g.fillStyle = '#54412c'; g.fillRect(fx, sy + 4, fw, 1);
+    const st = String(Game.seedText || '');
+    PixelFont.shadow(g, st, fx + 6, sy + 7, '#f7e07a', 1);
+    if (Math.floor(TitleT * 2.6) % 2 === 0) {
+      g.fillStyle = '#f7e07a';
+      g.fillRect(fx + 8 + PixelFont.measure(st, 1), sy + 6, 2, 8);
+    }
+    const rw = 76, rx = bx + bw - rw - 6;
+    const rhov = this.mx >= rx && this.mx < rx + rw && this.my >= sy + 1 && this.my < sy + seedH - 1;
+    g.fillStyle = rhov ? '#4d3a28' : '#3a2c1e'; g.fillRect(rx, sy + 1, rw, seedH - 2);
+    g.fillStyle = rhov ? '#d9b489' : '#7a5c3a'; g.fillRect(rx, sy + 1, rw, 1);
+    g.fillRect(rx, sy + seedH - 2, rw, 1);
+    PixelFont.shadow(g, 'RANDOM', rx + rw / 2, sy + 7, rhov ? '#f7e07a' : '#f0d24a', 1, 'center');
+    if (reg) this.region(rx, sy + 1, rw, seedH - 2, function () {
+      Game.rollSeed(); AudioSys.play('select'); FX.toast('SEED ' + Game.seedText, '#9fe0c0');
+    });
+    iy = sy + seedH + gap;
+
+    PixelFont.shadow(g, 'ARROW KEYS + ENTER   TYPE DIGITS FOR SEED', W / 2, iy + 6, '#8f7f6a', 1, 'center');
 
     if (Game.hasSave) {
       const delTxt = this.arm.del > 0 ? 'CLICK AGAIN TO DELETE SAVE' : 'DELETE SAVE';
@@ -1164,8 +1436,8 @@ const UI = {
 
     const hintY = H - (small ? 54 : 66);
     if (py + ph + 46 < hintY) {
-      PixelFont.shadow(g, 'WASD MOVE   E INTERACT   SPACE USE TOOL', W / 2, hintY, '#c9bba4', 1, 'center');
-      PixelFont.shadow(g, 'I INVENTORY   H HELP   M SOUND   ESC PAUSE', W / 2, hintY + 16, '#c9bba4', 1, 'center');
+      PixelFont.shadow(g, Settings.hintLine1(), W / 2, hintY, '#c9bba4', 1, 'center');
+      PixelFont.shadow(g, Settings.hintLine2(), W / 2, hintY + 16, '#c9bba4', 1, 'center');
     }
     PixelFont.shadow(g, 'A FAN-MADE COZY FARMING GAME', W / 2, H - 24, '#9c8a70', 1, 'center');
   }

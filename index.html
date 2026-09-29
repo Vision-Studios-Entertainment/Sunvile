@@ -19,8 +19,13 @@
     world.js      World      procedural maps, tiles, collision grids, save blob
     entities.js   Player,    player movement, particle FX, NPC/chicken AI,
                   FX         nearestInteract() lookup used by Game.interact()
+    settings.js   Settings   persisted options (audio/language/etc)
     audio.js      AudioSys   WebAudio SFX + generative music (no audio files)
     game.js       Game       THE state machine: time, money, inventory, save
+    rpc.js        DiscordRPC Discord rich presence over a local websocket
+                             bridge (ws://127.0.0.1:6464). Degrades silently
+                             when no bridge is running; reads Settings, which
+                             is why it loads after settings.js
     render.js     Renderer   2D canvas renderer: camera, lighting, weather
     ui.js         UI         canvas-drawn HUD/menus + immediate-mode regions
     main.js       Input,     boot(), RAF loop, key/mouse routing, smoke test
@@ -32,7 +37,7 @@
     document.title — that is how headless checks read the result:
       chrome --headless=new --virtual-time-budget=6000 --dump-dom \
         "file:///.../index.html?test=1"
-    Other params: ?day= &hour= &menu=shop|inv|pause|help|talk
+    Other params: ?day= &hour= &menu=shop|inv|pause|settings|help|talk
 
   RULES FOR FUTURE SESSIONS -----------------------------------------------
     * No bundler/transpiler — ES2017-era syntax only, no import/export.
@@ -42,11 +47,9 @@
       Game.continueGame(), or it silently resets on reload.
     * Art is generated at runtime from ART strings — never add image/audio
       files; sprites.js draws them onto canvases at boot.
-    * Only the scripts listed above are live. Files sitting in js/ that are
-      NOT loaded yet: i18n.js (blocked by a `T` name clash with data.js),
-      lang-*.js, settings.js, loader.js, rpc.js, touch.js, sheet.js. Do not
-      assume their code runs — and if you wire one in, add its <script> tag
-      in dependency order and re-run ?test=1.
+    * Only the scripts listed below are live. i18n.js + lang-*.js ARE loaded
+      (30 languages, auto localisation via L()). The helper is named L(),
+      not T(), to avoid clashing with the tile enum `const T` in data.js.
 
   VERIFY AFTER ANY CHANGE -----------------------------------------------
       chrome --headless=new --virtual-time-budget=6000 --dump-dom \
@@ -64,6 +67,15 @@
 <canvas id="game"></canvas>
 <script src="js/art-data.js"></script>
 <script src="js/data.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/lang-es-fr-de-it-pt.js"></script>
+<script src="js/lang-nl-pl-ru-uk-tr.js"></script>
+<script src="js/lang-ar-hi-bn-zh.js"></script>
+<script src="js/lang-ja-ko.js"></script>
+<script src="js/lang-th-vi-id.js"></script>
+<script src="js/lang-ms-sv.js"></script>
+<script src="js/lang-no-da-fi.js"></script>
+<script src="js/lang-el-he-cs-ro.js"></script>
 <script src="js/story.js"></script>
 <script src="js/sprites.js"></script>
 <script src="js/world.js"></script>
