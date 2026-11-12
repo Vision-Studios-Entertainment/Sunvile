@@ -49,3 +49,8 @@ python -m http.server
 ## License
 
 MIT
+
+### Developer Note:
+This is where the game is published
+
+https://vision-studios-entertainment.github.io/Sunvile/
